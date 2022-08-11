@@ -16,7 +16,8 @@
 
 typedef struct _fuzz_error_t fuzz_error_t;
 typedef enum _fuzz_error_code {
-    FUZZ_ERROR_INVALID_SYNTAX
+    FUZZ_ERROR_INVALID_SYNTAX,
+    FUZZ_ERROR_TOO_MUCH_NESTING
 } fuzz_error_code;
 
 

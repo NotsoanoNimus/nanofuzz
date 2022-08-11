@@ -8,6 +8,9 @@
 
 #include "fuzz_error.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 
 
 struct _fuzz_error_t {

@@ -229,14 +229,18 @@ int main( int argc, char* const argv[] ) {
         print_fuzz_error();
         exit( 1 );
     } else {
+        // TEST CODE //
         printf( "Data size: %lu\n", PatternFactory__get_data_size( p_pattern_factory ) );
         print_hex(
             "factory node_seq",
             PatternFactory__get_data( p_pattern_factory ),
             PatternFactory__get_data_size( p_pattern_factory )
         );
-    }
 
+        // Explain the factory.
+        PatternFactory__explain( stdout, p_pattern_factory );
+        ///////////////
+    }
 
     // TEST CODE
     printf( "Generating '%lu' values. OK\n", amount_to_generate );
@@ -259,6 +263,7 @@ int main( int argc, char* const argv[] ) {
     // TODO: initialize
 
     // Free unnecessary allocations.
+    PatternFactory__delete( p_pattern_factory );
     free( p_pattern_contents );
 }
 
@@ -302,7 +307,7 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
                 perror( "fseek set: unseekable file" );
                 exit( 1 );
             }
-        } else file_size = (FUZZ_MAX_PATTERN_LENGTH-1);
+        } else  file_size = (FUZZ_MAX_PATTERN_LENGTH-1);
 
         // Make sure it doesn't exceed the maximum parseable pattern length.
         if ( file_size >= FUZZ_MAX_PATTERN_LENGTH )
@@ -326,8 +331,11 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
         }
 
         // Now assign the read contents to the pattern_contents location.
-        p_pattern_data = strndup( p_read, (FUZZ_MAX_PATTERN_LENGTH-1) );
-        p_pattern_data[strlen(p_pattern_data)] = '\0';
+/*        char* p_final = (char*)calloc( read_count+1, sizeof(char) );
+        memcpy( p_final, p_read, read_count );
+        p_final[read_count] = '\0';*/
+        p_pattern_data = strndup(  p_read, strnlen( p_read, FUZZ_MAX_PATTERN_LENGTH-1 )  );
+
         if ( p_read != NULL )  free( p_read );
 
         // One last check to make sure the pattern is filled.

@@ -27,10 +27,9 @@ typedef struct _fuzz_range_t fuzz_range_t;
 // Represents the different types of possible pattern blocks which can
 //   be added to the fuzz factory.
 typedef enum _pattern_block_type {
-    string,
     variable,
     reference,
-    range,
+    string,
     sub
 } pattern_block_type;
 
@@ -42,6 +41,8 @@ void* PatternFactory__get_data( fuzz_factory_t* p_fact );
 size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact );
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
 void PatternFactory__delete( fuzz_factory_t* p_fact );
+// Explain the procedural string generation process, outputting to the given stream/file.
+void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 // Generate a pattern factory from an input pattern string.
 //   This method is wrapped in the API calls.
 fuzz_factory_t* PatternFactory__new( const char* p_pattern_str );
