@@ -28,10 +28,11 @@ typedef enum _fuzz_error_code {
 
 
 
-const char* get_fuzz_error_str();
-void clear_fuzz_error();
-void print_fuzz_error();
-void set_fuzz_error( size_t nest_level, size_t pointer_loc, fuzz_error_code code, const char* p_msg );
+fuzz_error_t* Error__new();
+void Error__delete( fuzz_error_t* p_err );
+void Error__print( fuzz_error_t* p_err, FILE* fp_to );
+void Error__add( fuzz_error_t* p_err, size_t nest_level,
+    size_t pointer_loc, fuzz_error_code code, const char* p_msg );
 
 
 

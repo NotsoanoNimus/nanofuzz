@@ -223,10 +223,13 @@ int main( int argc, char* const argv[] ) {
     if ( NULL == p_pattern_contents || !strnlen( p_pattern_contents, 1 ) )
         errx( 1, "A pattern to parse was not found. Please check the provided options and try again.\n" );
 
+    // Create a new error context to read problems from the pattern string, if any.
+    fuzz_error_t* p_err_ctx = Error__new();
+
     // Parse it and generate a pattern factory in the background.
-    fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents );
+    fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents, p_err_ctx );
     if ( NULL == p_pattern_factory ) {
-        print_fuzz_error();
+        Error__print( p_err_ctx, stderr );
         exit( 1 );
     } else {
         // TEST CODE //

@@ -8,6 +8,7 @@
 #ifndef _FUZZ_PATTERN_H
 #define _FUZZ_PATTERN_H
 
+#include "fuzz_error.h"
 #include "list.h"
 #include "api.h"
 
@@ -46,7 +47,8 @@ void PatternFactory__delete( fuzz_factory_t* p_fact );
 void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 // Generate a pattern factory from an input pattern string.
 //   This method is wrapped in the API calls.
-fuzz_factory_t* PatternFactory__new( const char* p_pattern_str );
+fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_err );
+
 
 
 #endif   /* _FUZZ_PATTERN_H */

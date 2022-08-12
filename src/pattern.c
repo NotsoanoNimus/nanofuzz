@@ -53,6 +53,8 @@ struct _fuzz_ctx_t {
     fuzz_pattern_block_t** p_nest_tracker;
     // Tracks the index into the above, preventing over-complexity of input patterns.
     size_t nest_level;
+    // Context-dependent pattern error handler.
+    fuzz_error_t* p_err;
 };
 
 
@@ -86,6 +88,7 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
     p_ctx->p_nest_tracker = (fuzz_pattern_block_t**)calloc(
         FUZZ_MAX_NESTING_COMPLEXITY, sizeof(fuzz_pattern_block_t*) );
     p_ctx->nest_level = 0;
+    p_ctx->p_err = Error__new();
 
     return (struct _fuzz_ctx_t* const)p_ctx;
 }
@@ -235,21 +238,34 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 
 // Build the fuzz factory. Since this is only intended to run as part of the
 //   wind-up cycle, optimization is not an essential concern here.
-fuzz_factory_t* PatternFactory__new( const char* p_pattern_str ) {
-    clear_fuzz_error();
+fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_err ) {
+    if ( NULL == p_err )  p_err = Error__new();
 
+    // Create a new pattern context.
     struct _fuzz_ctx_t* const p_ctx = __Context__new();
-    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
-    __Context__delete( p_ctx );
+    // Free and override the default err_ctx if one's provided. This will always run
+    //   but that's not really a big deal right now. ---TODO---
+    if ( p_err ) {
+        if ( p_ctx->p_err )  free( p_ctx->p_err );
+        p_ctx->p_err = p_err;
+    }
 
+    // Parse the pattern. MAGIC!
+    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
+
+    // Discard the context then return the blobbed fuzz factory data.
+    __Context__delete( p_ctx );
     return __compress_List_to_factory( p_the_sequence );
 }
 
 
 // Define a set of functional or syntactically special characters.
-static const char special_chars[] = "$\\[{(";
+static const char special_chars[] = "$\\[{()}]";
 // Macro to register a fuzz error inside a fuzz_ctx (the pattern_parse func mainly).
-#define FUZZ_ERR_IN_CTX(errtype,errstr) { set_fuzz_error( p_ctx->nest_level, (p-p_pattern), errtype, errstr ); goto __err_exit; }
+#define FUZZ_ERR_IN_CTX(errtype,errstr) {\
+    Error__add( p_ctx->p_err, p_ctx->nest_level, (p-p_pattern), errtype, errstr ); \
+    goto __err_exit; \
+}
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern ) {
@@ -342,8 +358,14 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 //   end of the opening nest, regardless of () nests between.
                 size_t pres = (nest_level+1);
                 const char* p_seek = (p+1);
-                for ( ; (*p_seek) && pres > nest_level; p_seek++ )
+                for ( ; (*p_seek) && pres > nest_level; p_seek++ ) {
                     pres += (  ((*p_seek == '(')*1) + ((*p_seek == ')')*-1)  );
+                    if ( pres > FUZZ_MAX_NESTING_COMPLEXITY ) {
+                         FUZZ_ERR_IN_CTX( FUZZ_ERROR_TOO_MUCH_NESTING,
+                            "Subsequence '()' statements can only be nested up to 5 times."
+                            " Consider simplifying your pattern." );
+                    }
+                }
 
                 p_seek--;   // back out by 1
 
@@ -406,6 +428,10 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 // Finally, advance the pointer to the 'p_seek' location;
                 //   presumably where the closing ')' was found.
                 p = p_seek;
+                break;
+            }
+            case ')': {   //edge-case: unexpected ')'s
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ')'. Please escape this character ('\\')." );
                 break;
             }
 
