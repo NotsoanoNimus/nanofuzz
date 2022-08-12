@@ -13,7 +13,7 @@
 
 
 
-// A ranging mechanism used in the pattern blocks to determine the amount of times, if set,
+// A ranging structure used in the pattern blocks to determine the amount of times, if set,
 //   to repeat a block of pattern data.
 struct _fuzz_range_t {
     unsigned char single;   // If non-zero, the 'base' value is the static amount to generate; no ranging.
@@ -91,7 +91,7 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
 }
 
 // Destroy a context. For now, this simply frees the context and tracker.
-static void __Context__delete( const struct _fuzz_ctx_t* p ) {
+static void __Context__delete( struct _fuzz_ctx_t* const p ) {
     if ( p ) {
         if ( p->p_nest_tracker )  free( p->p_nest_tracker );
         free( (void*)p );
@@ -185,8 +185,9 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         }
 
         // Preliminary/Common string output and setup.
+        fprintf( fp_stream, "[Step %lu] ", (i+1) );
         for ( size_t j = 0; j < nest; j++ )  fprintf( fp_stream, ">" );
-        fprintf( fp_stream, "  ++ [Step %lu] ", (i+1) );
+        fprintf( fp_stream, " " );
 
         // Create a string describing the range of occurrence for the pattern object, if any.
         //   The longest range is 'XXXXX to YYYYY' (15 bytes - inc null-term).
@@ -200,23 +201,27 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         switch ( p->type ) {
 
             case string: {
-                fprintf( fp_stream, "Output static string: '%s' (%s times)\n", (const char*)(p->data), p_range_str );
+                fprintf( fp_stream, "Output static string: '%s' (%s times)\n",
+                    (const char*)(p->data), p_range_str );
                 break;
             }
 
             case sub: {
-                fprintf( fp_stream, "VVV Enter subsequence layer, which repeats '%s' times.\n", p_range_str );
+                fprintf( fp_stream, "VVV Enter subsequence layer (nest tag %lu), which repeats '%s' times.\n",
+                    *((size_t*)(p->data)), p_range_str );
                 nest++;
                 break;
             }
             case ret: {
-                fprintf( fp_stream, "^^^ Return from subsequence layer; goes '%lu' nodes back.\n", *((size_t*)(p->data)) );
+                fprintf( fp_stream, "^^^ Return from subsequence layer; goes '%lu' nodes back.\n",
+                    *((size_t*)(p->data)) );
                 nest--;
                 break;
             }
 
             default : {
-                fprintf( fp_stream, "~~~~~ Misunderstood pattern block TYPE (%u) at node '%lu'. This is problematic!\n", p->type, i );
+                fprintf( fp_stream, "~~~~~ Misunderstood pattern block TYPE (%u) at node '%lu'. Problem!\n",
+                    p->type, i );
                 break;
             }
 
@@ -330,8 +335,8 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
             // ********** SUBSEQUENCE (NEST) **********
             case '(': {
-                // Play nicely.
-                if ( nest_level >= FUZZ_MAX_NESTING_COMPLEXITY ) {
+                // Play nicely. 1 is added here since the FUZZ_.. def is NOT 0-based, it's 1-based :)
+                if ( (nest_level+1) >= FUZZ_MAX_NESTING_COMPLEXITY ) {
                     // TODO: Fix the static string here!
                     set_fuzz_error( FUZZ_ERROR_TOO_MUCH_NESTING,
                         "Subsequence '()' statements can only be nested up to 5 times."
@@ -382,9 +387,9 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 free( p_sub );
 
                 // At this point, essentially linearly staple the output of the sub in memory.
-                List__reverse( x );
+                //List__reverse( x );
                 for ( ListNode_t* y = List__get_head( x ); y; y = y->next )
-                    List__add_node( p_seq, y );
+                    List__add_node( p_seq, y->node );
 
 
                 // Create the ret node and point it back to 'p_new_block'.
@@ -401,7 +406,6 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
 
                 // Finally, advance the pointer to the 'p_seek' location;
                 //   presumably where the closing ')' was found.
-                //nest_level++;
                 p = p_seek;
                 break;
             }
@@ -428,10 +432,10 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 __static_string_stop:
 //printf( "plabel: %c\n", *p );
                     if ( p > start ) {
-//printf( "p1: %c\n", *p );
+printf( "p1: %c\n", *p );
                         p_new_block = NEW_PATTERN_BLOCK;
                         *(p_nest_tracker+nest_level) = p_new_block;
-                        char* z = (char*)strndup( start, (p-start) );
+                        char* z = (char*)strndup(  start, ( p-start + (1*('{' != *(p+1))) )  );
                         p_new_block->type = string;
                         p_new_block->data = z;
                         (p_new_block->count).single = 1;
