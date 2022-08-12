@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "list.h"
+
 // Maximum string length of error fragments.
 #define FUZZ_ERROR_MAX_STRLEN 512
 // Maximum amount of fragments the error list can hold.
@@ -33,6 +35,7 @@ void Error__delete( fuzz_error_t* p_err );
 void Error__print( fuzz_error_t* p_err, FILE* fp_to );
 void Error__add( fuzz_error_t* p_err, size_t nest_level,
     size_t pointer_loc, fuzz_error_code code, const char* p_msg );
+List_t* Error__get_fragments( fuzz_error_t* p_err );
 
 
 

@@ -12,10 +12,24 @@
 
 #include "pattern.h"
 
+#include <stdio.h>
 
 
-// Generste more data using the given factory.
-const char* Generator__next( fuzz_factory_t* p_factory );
+
+// Define a generator context to use, which must be associated with a factory.
+typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
+
+
+
+// Create a new generator context with a factory to 'prime' generation a bit.
+fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory );
+
+// Generate more data using the given factory.
+//   NOTE: The return value resides on the heap and must be freed when
+const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx );
+// Instead of returning heap data, manages the memory for the caller and
+//   writes the generated content to the given I/O stream.
+void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to );
 
 
 

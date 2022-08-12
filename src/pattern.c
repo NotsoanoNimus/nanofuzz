@@ -250,12 +250,17 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_
         p_ctx->p_err = p_err;
     }
 
-    // Parse the pattern. MAGIC!
+    // Parse the pattern and manufacture the factory (meta). MAGIC!
     List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
+    fuzz_factory_t* p_ff = __compress_List_to_factory( p_the_sequence );
 
-    // Discard the context then return the blobbed fuzz factory data.
+    // Discard the context since a pointer to the err ctx is available.
     __Context__delete( p_ctx );
-    return __compress_List_to_factory( p_the_sequence );
+    // If the factory returned OK and there are no warnings/errors, just destroy the err ctx.
+    if ( p_ff && p_err && List__get_count( Error__get_fragments(p_err) ) < 1 )
+        Error__delete( p_err );
+
+    return p_ff;
 }
 
 

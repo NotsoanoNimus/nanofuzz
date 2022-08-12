@@ -7,7 +7,6 @@
  */
 
 #include "fuzz_error.h"
-#include "list.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -109,4 +108,10 @@ void Error__add( fuzz_error_t* p_err, size_t nest_level,
     // Finally, add the fragment onto the error stack trace.
     List__add_node( p_err->p_fragments, (void*)p_frag );
 
+}
+
+
+// Fetch the pointer to the fragments list.
+List_t* Error__get_fragments( fuzz_error_t* p_err ) {
+    return p_err->p_fragments;
 }

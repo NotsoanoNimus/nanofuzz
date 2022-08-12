@@ -22,6 +22,7 @@
 #include "api.h"
 #include "pattern.h"
 #include "xoroshiro.h"
+#include "generator.h"
 
 
 
@@ -247,11 +248,16 @@ int main( int argc, char* const argv[] ) {
 
     // TEST CODE
     printf( "Generating '%lu' values. OK\n", amount_to_generate );
-    printf( "Input content is %lu bytes long.\n", (unsigned long)strlen(p_pattern_contents) );
+    fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory );
+
+    for ( size_t t = 0; t < amount_to_generate; t++ )
+        printf(  "FUZZ: %s\n", Generator__get_next( p_genctx )  );
+
+/*    printf( "Input content is %lu bytes long.\n", (unsigned long)strlen(p_pattern_contents) );
     printf( "Read bytes:\n" );
     print_hex( "Pattern Contents", p_pattern_contents, strlen( p_pattern_contents ) );
     printf( "\n\n" );
-/*    printf( "%lu\n", time(NULL) );
+    printf( "%lu\n", time(NULL) );
     xoroshiro256p_state_t* rand_state = xoroshiro__new( time(NULL) );
     for( int i = 0; i < 10; i++ )
         printf( "%lu\n", xoroshiro__get_next( rand_state ) );
