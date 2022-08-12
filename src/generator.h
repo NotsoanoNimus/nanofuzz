@@ -14,6 +14,21 @@
 
 #include <stdio.h>
 
+// WARNING: Change these at your own risk!
+#define FUZZ_GEN_CTX_POOL_MULTIPLIER (1 * 1024 * 1024)
+
+
+
+// This enum is for multiplying the base pool size of a generator context.
+typedef enum _fuzz_gen_ctx_pool_type_t {
+    //   By default, "normal" contexts generate strings up to 16 MiB apiece.
+    normal = (1 << 4),
+    //   "Large" pools gobble 128 MiB...
+    large = (1 << 7),
+    //   And 'extreme' binary pools allocate 1GB! Be careful!
+    extreme = (1 << 10)
+} gen_pool_type;
+
 
 
 // Define a generator context to use, which must be associated with a factory.
@@ -22,7 +37,7 @@ typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
 
 
 // Create a new generator context with a factory to 'prime' generation a bit.
-fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory );
+fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type );
 // Deletes an allocated generator context and its PRNG.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx );
 

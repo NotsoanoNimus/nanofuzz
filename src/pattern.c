@@ -13,7 +13,7 @@
 
 
 
-// A ranging structure used in the pattern blocks to determine the amount of times, if set,
+/*// A ranging structure used in the pattern blocks to determine the amount of times, if set,
 //   to repeat a block of pattern data.
 struct _fuzz_range_t {
     unsigned char single;   // If non-zero, the 'base' value is the static amount to generate; no ranging.
@@ -32,7 +32,7 @@ struct _fuzz_pattern_block_t {
     fuzz_range_t count;
     // This label is the name of the variable assigned to the block, if any.
     const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-} __attribute__((__packed__));
+} __attribute__((__packed__));*/
 
 // Represents a single contiguous block of memory which all of the block items get joined into.
 //   This is what nanofuzz will actually use in generating content.
@@ -109,7 +109,7 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
 
     // Fetch the list items count, calloc, set each cell, and create the factory.
     fuzz_factory_t* x = (fuzz_factory_t*)calloc( 1, sizeof(fuzz_factory_t) );
-    x->count = List__get_count( p_list );
+    x->count = ( List__get_count( p_list ) + 1 );   // +1 for 'end' node
     x->_list = p_list;
 
     // Create the new blob and start filling it out.
@@ -123,6 +123,14 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     //   memory cells needs to happen in reverse.
     scroll += ( x->count * sizeof(fuzz_pattern_block_t) );
 
+    // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
+    //   it encountered a terminal point. Scroll backwards one element, set it, and add it.
+    scroll -= sizeof(fuzz_pattern_block_t);
+    fuzz_pattern_block_t* p_end = (fuzz_pattern_block_t*)scroll;
+    p_end->type = end;
+    p_end->data = NULL;   // count and label don't matter, just the 'end' type
+
+    // Now insert from the list.
     ListNode_t* y = List__get_head( p_list );
     while ( NULL != y && scroll >= (unsigned char*)(x->node_seq) ) {
         scroll -= sizeof(fuzz_pattern_block_t);
@@ -219,6 +227,11 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 fprintf( fp_stream, "^^^  Repeat subsequence layer as applicable; goes '%lu' nodes back.\n",
                     *((size_t*)(p->data)) );
                 nest--;
+                break;
+            }
+
+            case end: {
+                fprintf( fp_stream, "!!! Stream end block (termination).\n" );
                 break;
             }
 

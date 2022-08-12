@@ -37,21 +37,26 @@ typedef struct _fuzz_generator_state_vector_t {
 //   does NOT affect the randomness of the sequences.
 struct _fuzz_generator_context_t {
     state_t state;
+    gen_pool_type type;
     fuzz_factory_t* p_factory;
     const xoroshiro256p_state_t* p_prng;
+    unsigned char* p_data_pool;
 };
 
 
 
 // Create a new generator context for re/use to make string generation faster.
-fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory ) {
+fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
     if ( NULL == p_factory )  return NULL;
 
     // Create the context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
+    x->type = type;
     x->p_factory = p_factory;
     x->p_prng = xoroshiro__new( time(NULL) );
+    x->p_data_pool = (unsigned char*)calloc( 1,
+        (type*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     return x;
 }
@@ -70,7 +75,15 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
 // Generate a new fuzzer output string.
 //   In this function, SPEED IS ESSENTIAL to maximize throughput.
 const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
-    return NULL;
+    if ( NULL == p_ctx )  return NULL;
+
+    fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
+
+    pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
+
+    // Let's do it
+    for ( size_t instr = 0; pip && end != pip->type; ) {
+    }
 }
 
 

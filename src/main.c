@@ -248,7 +248,7 @@ int main( int argc, char* const argv[] ) {
 
     // TEST CODE
     printf( "Generating '%lu' values. OK\n", amount_to_generate );
-    fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory );
+    fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory, normal );
 
     for ( size_t t = 0; t < amount_to_generate; t++ )
         printf(  "FUZZ: %s\n", Generator__get_next( p_genctx )  );
