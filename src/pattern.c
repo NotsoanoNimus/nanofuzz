@@ -58,8 +58,8 @@ struct _fuzz_ctx_t {
 
 
 // Some [important] local static functions.
-static inline void __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma );
-static List_t* __parse_pattern( const struct _fuzz_ctx_t* p_ctx, const char* p_pattern );
+static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma );
+static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern );
 
 
 
@@ -80,14 +80,14 @@ static const char* __seek_marker_end( const char* start, char const target ) {
 
 
 // Generate a fresh parsing context. For now, inline is OK.
-static inline const struct _fuzz_ctx_t* __Context__new() {
+static inline struct _fuzz_ctx_t* const __Context__new() {
     struct _fuzz_ctx_t* p_ctx = (struct _fuzz_ctx_t*)calloc( 1, sizeof(struct _fuzz_ctx_t) );
 
     p_ctx->p_nest_tracker = (fuzz_pattern_block_t**)calloc(
         FUZZ_MAX_NESTING_COMPLEXITY, sizeof(fuzz_pattern_block_t*) );
     p_ctx->nest_level = 0;
 
-    return (const struct _fuzz_ctx_t*)p_ctx;
+    return (struct _fuzz_ctx_t* const)p_ctx;
 }
 
 // Destroy a context. For now, this simply frees the context and tracker.
@@ -115,11 +115,15 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     // Assign the node sequence to the created heap blob.
     x->node_seq = scroll;
 
-    // Move data into the blob.
+    // Move data into the blob. Since the linked list implementation inserts the data like a stack,
+    //   the list HEAD actually contains the final element. Therefore, the insertion into adjacent
+    //   memory cells needs to happen in reverse.
+    scroll += ( x->count * sizeof(fuzz_pattern_block_t) );
+
     ListNode_t* y = List__get_head( p_list );
-    while ( NULL != y ) {
+    while ( NULL != y && scroll >= (unsigned char*)(x->node_seq) ) {
+        scroll -= sizeof(fuzz_pattern_block_t);
         memcpy( scroll, y->node, sizeof(fuzz_pattern_block_t) );
-        scroll += sizeof(fuzz_pattern_block_t);
         y = y->next;
     }
 
@@ -170,9 +174,55 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         return;
     }
 
+    size_t nest = 0;
+
     // Iterate the factory nodes and explain each.
     for ( size_t i = 0; i < p_fact->count; i++ ) {
+        fuzz_pattern_block_t* p = (fuzz_pattern_block_t*)(p_fact->node_seq + (i*sizeof(fuzz_pattern_block_t)));
+        if ( NULL == p ) {
+            fprintf( fp_stream, "~~ Misunderstood pattern block at node '%lu'. This is problematic!\n", i );
+            continue;
+        }
 
+        // Preliminary/Common string output and setup.
+        for ( size_t j = 0; j < nest; j++ )  fprintf( fp_stream, ">" );
+        fprintf( fp_stream, "  ++ [Step %lu] ", (i+1) );
+
+        // Create a string describing the range of occurrence for the pattern object, if any.
+        //   The longest range is 'XXXXX to YYYYY' (15 bytes - inc null-term).
+        char* p_range_str = (char*)calloc( 15, sizeof(char) );
+        if ( p->count.single )
+            snprintf( p_range_str, 15, "%d", p->count.base );
+        else
+            snprintf( p_range_str, 15, "%u to %u", p->count.base, p->count.high );
+
+        // Based on the item's type, read some information about it.
+        switch ( p->type ) {
+
+            case string: {
+                fprintf( fp_stream, "Output static string: '%s' (%s times)\n", (const char*)(p->data), p_range_str );
+                break;
+            }
+
+            case sub: {
+                fprintf( fp_stream, "VVV Enter subsequence layer, which repeats '%s' times.\n", p_range_str );
+                nest++;
+                break;
+            }
+            case ret: {
+                fprintf( fp_stream, "^^^ Return from subsequence layer; goes '%lu' nodes back.\n", *((size_t*)(p->data)) );
+                nest--;
+                break;
+            }
+
+            default : {
+                fprintf( fp_stream, "~~~~~ Misunderstood pattern block TYPE (%u) at node '%lu'. This is problematic!\n", p->type, i );
+                break;
+            }
+
+        }
+
+        free( p_range_str );
     }
 }
 
@@ -183,7 +233,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 fuzz_factory_t* PatternFactory__new( const char* p_pattern_str ) {
     clear_fuzz_error();
 
-    const struct _fuzz_ctx_t* p_ctx = __Context__new();
+    struct _fuzz_ctx_t* const p_ctx = __Context__new();
     List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
     __Context__delete( p_ctx );
 
@@ -195,7 +245,7 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str ) {
 static const char special_chars[] = "$\\[{(";
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
-static List_t* __parse_pattern( const struct _fuzz_ctx_t* p_ctx, const char* p_pattern ) {
+static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern ) {
     size_t len, nest_level;
     const char* p;
     List_t* p_seq;
@@ -228,7 +278,7 @@ static List_t* __parse_pattern( const struct _fuzz_ctx_t* p_ctx, const char* p_p
             case '[':
                 break;
 
-
+            // ********** REPETITION **********
             case '{': {
                 // The current block ptr cannot be NULL.
                 if ( NULL == *p_nest_tracker ) {
@@ -264,40 +314,107 @@ static List_t* __parse_pattern( const struct _fuzz_ctx_t* p_ctx, const char* p_p
 
                 // Parse the field data and set the range information on the current block pointer.
                 const char* t = strndup( p+1, (end-1)-p );
-                __bracket_parse_range( *p_nest_tracker, t, comma );
+                int res = __bracket_parse_range( *p_nest_tracker, t, comma );
                 free( (void*)t );
+
+                if ( 0 == res ) {
+                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Repetition '{}' statement has an invalid range; please refer to the pattern documentation" );
+                    goto __err_exit;
+                }
 
                 // Set 'p' to end. It will increment to the character after '}' once the for-loop continues.
                 p = end;
                 break;
             }
 
-
-            case '(':
-                // Find the matching ')' and if found: trim, increment the nest level, and recurse.
+            // ********** SUBSEQUENCE (NEST) **********
+            case '(': {
+                // Play nicely.
                 if ( nest_level >= FUZZ_MAX_NESTING_COMPLEXITY ) {
                     // TODO: Fix the static string here!
                     set_fuzz_error( FUZZ_ERROR_TOO_MUCH_NESTING,
-                        "Subsequence '()' statements can only be nested up to 5 times. Consider simplifying your pattern." );
+                        "Subsequence '()' statements can only be nested up to 5 times."
+                        " Consider simplifying your pattern." );
                     goto __err_exit;
                 }
-                break;
+
+                // Find the next closing parenthesis according to the coming nest level.
+                //   Essentially what this does is look ahead in the string to find the matching
+                //   end of the opening nest, regardless of () nests between.
+                size_t pres = (nest_level+1);
+                const char* p_seek = (p+1);
+                for ( ; (*p_seek) && pres > nest_level; p_seek++ )
+                    pres += (  ((*p_seek == '(')*1) + ((*p_seek == ')')*-1)  );
+
+                p_seek--;   // back out by 1
+
+                // If the nest level didn't shift around properly
+                if ( pres > nest_level ) {
+                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Subsequence '()' statements are not closed properly." );
+                    goto __err_exit;
+                }
 
 
-            default : {
+                // Create the sub block and continue the necessary recursion.
+                //   'sub' is essentially just a marker for 'ret', which points to it
                 p_new_block = NEW_PATTERN_BLOCK;
+                *(p_nest_tracker+nest_level) = p_new_block;
+                p_new_block->type = sub;
 
-                int bracket = 0;
+                size_t* p_ns = (size_t*)calloc( 1, sizeof(size_t) );
+                *p_ns = nest_level;
+                p_new_block->data = p_ns;
+
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                List__add_node( p_seq, p_new_block );
+
+
+                //// RECURSION: Prepare a new substring and parse it anew.
+                char* p_sub = (char*)strndup( (p+1), (p_seek-1-p) );
+printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
+
+                (p_ctx->nest_level)++;
+                List_t* x = __parse_pattern( p_ctx, p_sub );
+
+                free( p_sub );
+
+                // At this point, essentially linearly staple the output of the sub in memory.
+                List__reverse( x );
+                for ( ListNode_t* y = List__get_head( x ); y; y = y->next )
+                    List__add_node( p_seq, y );
+
+
+                // Create the ret node and point it back to 'p_new_block'.
+                fuzz_pattern_block_t* p_ret = NEW_PATTERN_BLOCK;
+                //*(p_nest_tracker+nest_level) = p_new_block; //<- DO NOT
+                p_ret->type = ret;
+
+                size_t* p_sz = (size_t*)calloc( 1, sizeof(size_t) );
+                *p_sz = List__get_count( x );   //how many nodes to wade backward through
+                p_ret->data = p_sz;
+
+                p_new_block = p_ret;
+
+
+                // Finally, advance the pointer to the 'p_seek' location;
+                //   presumably where the closing ')' was found.
+                //nest_level++;
+                p = p_seek;
+                break;
+            }
+
+            // ********** STATIC STRING **********
+            default : {
                 // Move 'p' along until it encounters a special char or the end.
                 const char* start = p;
                 while( *p ) {
-printf( "statstrch = %c\n", *p );
+//printf( "statstrch = %c\n", *p );
                     for ( int j = 0; special_chars[j]; j++ ) {
                         if ( *p == special_chars[j] ) {
-printf( "--- FOUND %c\n", *p );
-                            // If the coming special char is a '{' we need to back the pointer out just one more step.
-                            //   Consider the sample string '1234{8}56' -- only '4' should be replicated 8 times here.
-                            if ( '{' == *p )  bracket = 1;
+//printf( "--- FOUND %c\n", *p );
                             p--;   //need to back-step by one
                             goto __static_string_stop;
                         }
@@ -309,19 +426,25 @@ printf( "--- FOUND %c\n", *p );
                 // Code that reaches here either encountered the end of the pattern string
                 //   or the iterator encountered a special character.
                 __static_string_stop:
-                    if ( bracket )  p--;
+//printf( "plabel: %c\n", *p );
                     if ( p > start ) {
+//printf( "p1: %c\n", *p );
+                        p_new_block = NEW_PATTERN_BLOCK;
                         *(p_nest_tracker+nest_level) = p_new_block;
                         char* z = (char*)strndup( start, (p-start) );
                         p_new_block->type = string;
                         p_new_block->data = z;
-                    } else  free ( p_new_block );
-                    if ( bracket ) {
+                        (p_new_block->count).single = 1;
+                        (p_new_block->count).base = 1;
+                    }
+
+                    // If the coming special char is a '{' we need to catalog the current static string (if one was defined)
+                    //   and create another. Consider the sample string '1234{8}56' -- only '4' should be replicated 8 times.
+                    if ( '{' == *(p+1) ) {
+//printf( "p2: %c\n", *p );
                         // If coming special character is a bracket then two new blocks need to be created.
                         //   First, add the most recently-created node. Then update the pointer for its reuse further on.
-                        List__add_node( p_seq, p_new_block );
-
-                        p++;   //step forward again to the pre-bracket char
+                        if ( p_new_block )  List__add_node( p_seq, p_new_block );
 
                         // Create the next static character.
                         fuzz_pattern_block_t* p_pre_bracket_char = NEW_PATTERN_BLOCK;
@@ -333,6 +456,7 @@ printf( "--- FOUND %c\n", *p );
 
                         p_pre_bracket_char->type = string;
                         p_pre_bracket_char->data = z;
+                        // Do not set the range/count property here -- the repetition seq will do it.
 
                         // Set the new head of the nest.
                         *(p_nest_tracker+nest_level) = p_pre_bracket_char;
@@ -342,8 +466,8 @@ printf( "--- FOUND %c\n", *p );
             }
         }
 
-        // Add the (hopefully-)populated node onto the list and continue;
-        List__add_node( p_seq, p_new_block );
+        // Add the (maybe-)populated node onto the list and continue;
+        if ( p_new_block )  List__add_node( p_seq, p_new_block );
         continue;
 
         __err_exit:
@@ -363,7 +487,85 @@ printf( "List elements: %lu\n", List__get_count( p_seq ) );
 
 
 
-// $1 - Block to set range; $2 - Range's inner text content; v$3 - >0 if a comma is present to split the range.
-static inline void __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma ) {
+// Returns a 16-bit WORD between 1 and 65535 from a string.
+static uint16_t __get_valid_uint16( const char* p_str ) {
+    if ( NULL == p_str || strnlen( p_str, 6 ) > 5 )  return 0;
 
+    for ( size_t i = 0; i < strnlen( p_str, 6 ); i++ )
+        if ( !isdigit( (int)(p_str[i]) ) )  return 0;
+
+    uint16_t val = (uint16_t)atoi( p_str );
+    if ( val < 1 || val > UINT16_MAX )  return 0;
+
+    return val;
+}
+
+// $1 - Block to set range; $2 - Range's inner text content; v$3 - >0 if a comma is present to split the range.
+//   Once this method is called, all other syntactical checks are already completed; just parse.
+static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma ) {
+    if ( NULL == p_block )  return 0;
+
+    if ( comma ) {
+        // The block is NOT single and the range must be parsed from the given string.
+        // ZERO is permitted here, and assumed when the left side of the comma is empty
+        (p_block->count).single = 0;
+        if ( ',' == *p_content ) {
+            // value is from 0 to the second operand
+            (p_block->count).base = 0;
+
+            // The __get_valid_uint16 function essentially forces the number to be 1+, so this is safe.
+            char* p_high = (char*)strdup( (p_content+1) );
+            uint16_t high = __get_valid_uint16( p_high );
+            free( p_high );
+
+            if ( high )
+                (p_block->count).high = high;
+            else
+                return 0;
+
+        } else {
+            // left side has a base value
+            char* p_save;
+            char* token;
+
+            token = strtok_r( (char*)p_content, ",", &p_save );
+            if ( NULL == token )  return 0;
+
+            // Parse the low value, allowing an explicitly-given '0' value.
+            uint16_t low = __get_valid_uint16( token );
+            if ( (*token == '0') && !low )   //first char must be 0 AND atoi didn't get num
+                (p_block->count).base = 0;
+            else if ( low )
+                (p_block->count).base = low;
+            else
+                return 0;
+
+            // Now parse the high, if it's not present, allow up to the max of 65535.
+            token = strtok_r( NULL, ",", &p_save );
+            if ( NULL == token ) {
+                (p_block->count).high = 65535;
+            } else {
+                uint16_t high = __get_valid_uint16( token );
+                if ( high )
+                    (p_block->count).high = high;
+                else
+                    return 0;
+            }
+
+            // Finally, ensure the high value exceeds the base one.
+            if ( (p_block->count).high <= (p_block->count).base )  return 0;
+
+        }
+    } else {
+        // Easy: just grab the integer, make sure it's in-range (1-65535), and mark the range as 'single'.
+        (p_block->count).single = 1;
+
+        uint16_t val = __get_valid_uint16( p_content );
+        if ( val )
+            (p_block->count).base = val;
+        else
+            return 0;
+    }
+
+    return 1;
 }

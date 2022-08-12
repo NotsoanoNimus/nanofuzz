@@ -27,10 +27,11 @@ typedef struct _fuzz_range_t fuzz_range_t;
 // Represents the different types of possible pattern blocks which can
 //   be added to the fuzz factory.
 typedef enum _pattern_block_type {
-    variable,
+    variable = 1,
     reference,
     string,
-    sub
+    sub,
+    ret
 } pattern_block_type;
 
 

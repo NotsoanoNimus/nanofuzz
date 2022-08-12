@@ -74,11 +74,13 @@ uint64_t xoroshiro__get_next( xoroshiro256p_state_t* p_state ) {
     return __xoroshiro256p__next( p_state );
 }
 
+uint64_t xoroshiro__get_bounded( xoroshiro256p_state_t* p_state, uint64_t low, uint64_t high ) {
+    return (  ( high > low ) * ((xoroshiro__get_next( p_state ) % (high - low)) + low)  );
+}
+
 uint8_t xoroshiro__get_byte( xoroshiro256p_state_t* p_state ) {
     return (uint8_t)__rol64( (__xoroshiro256p__next( p_state ) & 0x0000FF0000000000), 24 );
 }
-
-
 
 uint8_t xoroshiro__get_bounded_byte( xoroshiro256p_state_t* p_state, uint8_t low, uint8_t high ) {
     return (  ( high > low ) * ((xoroshiro__get_byte( p_state ) % (high - low)) + low)  );

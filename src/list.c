@@ -52,6 +52,21 @@ void List__clear( List_t* list ) {
     __List__set_head( list, NULL );
 }
 
+// Reverse the order of a list.
+void List__reverse( List_t* list ) {
+    if ( NULL == list )  return;
+
+    List_t* p_new = List__new( list->max_size );
+    ListNode_t* x = List__get_head( list );
+    while ( NULL != x ) {
+        List__add_node( p_new, x->node );
+        x = x->next;
+    }
+
+    //List__delete( list );
+    list = p_new;
+}
+
 
 // Get the amount of nodes in the linked-list object.
 size_t List__get_count( List_t* list ) {

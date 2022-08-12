@@ -263,7 +263,7 @@ int main( int argc, char* const argv[] ) {
     // TODO: initialize
 
     // Free unnecessary allocations.
-    PatternFactory__delete( p_pattern_factory );
+//    PatternFactory__delete( p_pattern_factory );
     free( p_pattern_contents );
 }
 
