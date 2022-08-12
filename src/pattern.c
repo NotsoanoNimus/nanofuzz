@@ -347,6 +347,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 p = end;
                 break;
             }
+            case '}': {   //edge-case: unexpected '}'s
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected '}'. Please escape this character ('\\}')." );
+                break;
+            }
 
             // ********** SUBSEQUENCE (NEST) **********
             case '(': {
@@ -436,7 +440,7 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 break;
             }
             case ')': {   //edge-case: unexpected ')'s
-                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ')'. Please escape this character ('\\')." );
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ')'. Please escape this character ('\\)')." );
                 break;
             }
 

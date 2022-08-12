@@ -8,6 +8,9 @@
  */
 
 #include "generator.h"
+#include "xoroshiro.h"
+
+#include <time.h>
 
 
 
@@ -35,6 +38,7 @@ typedef struct _fuzz_generator_state_vector_t {
 struct _fuzz_generator_context_t {
     state_t state;
     fuzz_factory_t* p_factory;
+    const xoroshiro256p_state_t* p_prng;
 };
 
 
@@ -47,8 +51,18 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory ) {
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
     x->p_factory = p_factory;
+    x->p_prng = xoroshiro__new( time(NULL) );
 
     return x;
+}
+
+
+// Deletes any allocated gen ctx resources.
+void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
+    if ( p_ctx ) {
+        if ( p_ctx->p_prng )  free( (void*)(p_ctx->p_prng) );
+        free( p_ctx );
+    }
 }
 
 
@@ -62,4 +76,7 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
 // Write the output the an I/O stream directly.
 void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to ) {
+    const char* const p_tmp = Generator__get_next( p_ctx );
+    fprintf( fp_to, "%s", p_tmp );
+    free( (void*)p_tmp );
 }

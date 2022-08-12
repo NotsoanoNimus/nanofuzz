@@ -23,6 +23,8 @@ typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
 
 // Create a new generator context with a factory to 'prime' generation a bit.
 fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory );
+// Deletes an allocated generator context and its PRNG.
+void Generator__delete_context( fuzz_gen_ctx_t* p_ctx );
 
 // Generate more data using the given factory.
 //   NOTE: The return value resides on the heap and must be freed when
