@@ -53,18 +53,19 @@ void List__clear( List_t* list ) {
 }
 
 // Reverse the order of a list.
-void List__reverse( List_t* list ) {
-    if ( NULL == list )  return;
+List_t* List__reverse( List_t* list ) {
+    if ( NULL == list || List__get_count( list ) < 1 )  return NULL;
 
     List_t* p_new = List__new( list->max_size );
+
     ListNode_t* x = List__get_head( list );
     while ( NULL != x ) {
         List__add_node( p_new, x->node );
         x = x->next;
     }
 
-    //List__delete( list );
-    list = p_new;
+    List__delete( list );
+    return p_new;
 }
 
 

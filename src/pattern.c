@@ -185,7 +185,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         }
 
         // Preliminary/Common string output and setup.
-        fprintf( fp_stream, "[Step %lu] ", (i+1) );
+        fprintf( fp_stream, "[Step %5lu] ", (i+1) );
         for ( size_t j = 0; j < nest; j++ )  fprintf( fp_stream, ">" );
         fprintf( fp_stream, " " );
 
@@ -207,13 +207,13 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
             }
 
             case sub: {
-                fprintf( fp_stream, "VVV Enter subsequence layer (nest tag %lu), which repeats '%s' times.\n",
+                fprintf( fp_stream, "vvv  Enter subsequence layer (nest tag %lu), which runs '%s' times.\n",
                     *((size_t*)(p->data)), p_range_str );
                 nest++;
                 break;
             }
             case ret: {
-                fprintf( fp_stream, "^^^ Return from subsequence layer; goes '%lu' nodes back.\n",
+                fprintf( fp_stream, "^^^  Repeat subsequence layer as applicable; goes '%lu' nodes back.\n",
                     *((size_t*)(p->data)) );
                 nest--;
                 break;
@@ -248,21 +248,20 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str ) {
 
 // Define a set of functional or syntactically special characters.
 static const char special_chars[] = "$\\[{(";
+// Macro to register a fuzz error inside a fuzz_ctx (the pattern_parse func mainly).
+#define FUZZ_ERR_IN_CTX(errtype,errstr) { set_fuzz_error( p_ctx->nest_level, (p-p_pattern), errtype, errstr ); goto __err_exit; }
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern ) {
     size_t len, nest_level;
     const char* p;
     List_t* p_seq;
-    fuzz_pattern_block_t** p_nest_tracker;
 
     len = strnlen( p_pattern, (FUZZ_MAX_PATTERN_LENGTH-1) );
     nest_level = p_ctx->nest_level;
 
     p = p_pattern;
     p_seq = List__new( FUZZ_MAX_PATTERN_LENGTH );
-
-    p_nest_tracker = p_ctx->p_nest_tracker;
 
     // Let's go!
     printf( "Parsing %lu bytes of input.\n", len );
@@ -286,46 +285,41 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
             // ********** REPETITION **********
             case '{': {
                 // The current block ptr cannot be NULL.
-                if ( NULL == *p_nest_tracker ) {
-                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
-                        "The repetition statement '{}' must follow a valid string or other pattern." );
-                    goto __err_exit;
+                if ( NULL == *((p_ctx->p_nest_tracker)+nest_level) ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                        "The repetition statement '{}' must follow a valid string or other pattern." )
                 }
 
                 // Make sure a closing brace is found.
                 const char* end = __seek_marker_end( p, '}' );
                 if ( NULL == end ) {
-                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
                         "Pattern contains unclosed or empty repetition statement '{}'" );
-                    goto __err_exit;
                 }
 
                 // Character check. Limit commas to only one occurrence.
                 int comma = 0;
                 for ( const char* x = (p+1); x < end; x++ ) {
                     if (  ( (*x != ',') || (',' == *x && comma) ) && !isdigit( (int)*x )  ) {
-                        set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                        FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
                             "Repetition '{}' statements can only contain digits and a single comma" );
-                        goto __err_exit;
                     } else if ( (',' == *x) )  comma = 1;
                 }
 
                 // A final outer check that the only char inside the brackets is NOT just a comma.
                 if ( 1 == (end-1-p) && comma ) {
-                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
                         "Repetition '{}' statements cannot consist of a single comma only" );
-                    goto __err_exit;
                 }
 
                 // Parse the field data and set the range information on the current block pointer.
                 const char* t = strndup( p+1, (end-1)-p );
-                int res = __bracket_parse_range( *p_nest_tracker, t, comma );
+                int res = __bracket_parse_range( *((p_ctx->p_nest_tracker)+nest_level), t, comma );
                 free( (void*)t );
 
                 if ( 0 == res ) {
-                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
                         "Repetition '{}' statement has an invalid range; please refer to the pattern documentation" );
-                    goto __err_exit;
                 }
 
                 // Set 'p' to end. It will increment to the character after '}' once the for-loop continues.
@@ -338,10 +332,9 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // Play nicely. 1 is added here since the FUZZ_.. def is NOT 0-based, it's 1-based :)
                 if ( (nest_level+1) >= FUZZ_MAX_NESTING_COMPLEXITY ) {
                     // TODO: Fix the static string here!
-                    set_fuzz_error( FUZZ_ERROR_TOO_MUCH_NESTING,
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_TOO_MUCH_NESTING,
                         "Subsequence '()' statements can only be nested up to 5 times."
                         " Consider simplifying your pattern." );
-                    goto __err_exit;
                 }
 
                 // Find the next closing parenthesis according to the coming nest level.
@@ -356,16 +349,15 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                 // If the nest level didn't shift around properly
                 if ( pres > nest_level ) {
-                    set_fuzz_error( FUZZ_ERROR_INVALID_SYNTAX,
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
                         "Subsequence '()' statements are not closed properly." );
-                    goto __err_exit;
                 }
 
 
                 // Create the sub block and continue the necessary recursion.
                 //   'sub' is essentially just a marker for 'ret', which points to it
                 p_new_block = NEW_PATTERN_BLOCK;
-                *(p_nest_tracker+nest_level) = p_new_block;
+                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                 p_new_block->type = sub;
 
                 size_t* p_ns = (size_t*)calloc( 1, sizeof(size_t) );
@@ -381,13 +373,20 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 char* p_sub = (char*)strndup( (p+1), (p_seek-1-p) );
 printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
 
-                (p_ctx->nest_level)++;
-                List_t* x = __parse_pattern( p_ctx, p_sub );
+                (p_ctx->nest_level)++;   // increase the nest level and enter
+                List_t* p_pre = __parse_pattern( p_ctx, p_sub );
+                (p_ctx->nest_level)--;   // ... and now leave the nest
 
                 free( p_sub );
 
+                // Make sure the returned list has some nodes. If not, problem.
+                if ( !p_pre || List__get_count( p_pre ) < 1 ) {
+                    char* const p_m = "Invalid, empty, or NULL branch inside Subsequence '()' statement.";
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, p_m );
+                }
+
                 // At this point, essentially linearly staple the output of the sub in memory.
-                //List__reverse( x );
+                List_t* x = List__reverse( p_pre );
                 for ( ListNode_t* y = List__get_head( x ); y; y = y->next )
                     List__add_node( p_seq, y->node );
 
@@ -434,7 +433,7 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                     if ( p > start ) {
 printf( "p1: %c\n", *p );
                         p_new_block = NEW_PATTERN_BLOCK;
-                        *(p_nest_tracker+nest_level) = p_new_block;
+                        *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                         char* z = (char*)strndup(  start, ( p-start + (1*('{' != *(p+1))) )  );
                         p_new_block->type = string;
                         p_new_block->data = z;
@@ -463,7 +462,7 @@ printf( "p1: %c\n", *p );
                         // Do not set the range/count property here -- the repetition seq will do it.
 
                         // Set the new head of the nest.
-                        *(p_nest_tracker+nest_level) = p_pre_bracket_char;
+                        *((p_ctx->p_nest_tracker)+nest_level) = p_pre_bracket_char;
                     }
 
                break;

@@ -6,11 +6,17 @@
  *
  */
 
+// TODO: Revisit and make this thread-safe
 #ifndef _FUZZ_FUZZ_ERROR_H
 #define _FUZZ_FUZZ_ERROR_H
 
 #include <stdio.h>
 #include <stdlib.h>
+
+// Maximum string length of error fragments.
+#define FUZZ_ERROR_MAX_STRLEN 512
+// Maximum amount of fragments the error list can hold.
+#define FUZZ_ERROR_MAX_NODES 16
 
 
 
@@ -22,13 +28,10 @@ typedef enum _fuzz_error_code {
 
 
 
-fuzz_error_t* p_fuzz_error;
-
-
-
+const char* get_fuzz_error_str();
 void clear_fuzz_error();
 void print_fuzz_error();
-void set_fuzz_error( fuzz_error_code code, const char* p_msg );
+void set_fuzz_error( size_t nest_level, size_t pointer_loc, fuzz_error_code code, const char* p_msg );
 
 
 

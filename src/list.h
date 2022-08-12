@@ -31,7 +31,7 @@ typedef struct _linked_list_t List_t;
 List_t* List__new( size_t max_size );
 void List__delete( List_t* list );
 void List__clear( List_t* list );
-void List__reverse( List_t* list );
+List_t* List__reverse( List_t* list );
 
 // Get the amount of nodes in the list.
 size_t List__get_count( List_t* list );
