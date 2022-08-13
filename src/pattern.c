@@ -13,27 +13,6 @@
 
 
 
-/*// A ranging structure used in the pattern blocks to determine the amount of times, if set,
-//   to repeat a block of pattern data.
-struct _fuzz_range_t {
-    unsigned char single;   // If non-zero, the 'base' value is the static amount to generate; no ranging.
-    unsigned short base;
-    unsigned short high;
-} __attribute__((__packed__));
-
-// A single unit of the fuzz factory used to generate fuzzer output.
-struct _fuzz_pattern_block_t {
-    // The type of pattern block being constructed: string, variable, reference, sub, etc.
-    pattern_block_type type;
-    // Represents a pointer to the node's data.
-    //   This could point to a string, another List, etc. depending on the type.
-    void* data;
-    // How many times to produce this specific node's data. Defaults to 1.
-    fuzz_range_t count;
-    // This label is the name of the variable assigned to the block, if any.
-    const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-} __attribute__((__packed__));*/
-
 // Represents a single contiguous block of memory which all of the block items get joined into.
 //   This is what nanofuzz will actually use in generating content.
 struct _fuzz_factory_t {

@@ -94,16 +94,15 @@ void Error__add( fuzz_error_t* p_err, size_t nest_level,
     // gross TODO
     // Account for the maximum length of the static string, plus some extra possible integer
     //   spacing (up to: 14 for Index and 4 for Err), then also add on the message length.
-    char p[43+strlen(p_msg)];
-    snprintf( p, (42+strlen(p_msg)), "[Err %2u] [Nest %lu] [Index %3lu] %s",
+    char* static_err = "[Err 1234] [Nest 1] [Index 12345678901234] ";
+    char* p = (char*)calloc( (1+strlen(static_err)+strlen(p_msg)), sizeof(char) );
+    snprintf( p, (strlen(static_err)+strlen(p_msg)), "[Err %2u] [Nest %lu] [Index %3lu] %s",
         code, nest_level, pointer_loc, p_msg );
-    p[43+strlen(p_msg)] = '\0';   //paranoia
+    *(p+strlen(static_err)+strlen(p_msg)) = '\0';   //paranoia
 
     // Free the earlier dup'd string pointer to replace it with the full message in the buffer!
     free( p_frag->p_msg );
-    char* p2 = (char*)calloc( strnlen( p, (FUZZ_ERROR_MAX_STRLEN-1) ), sizeof(char) );
-    memcpy(  p2,  p,  strnlen( p, (FUZZ_ERROR_MAX_STRLEN-1)*sizeof(char) )  );
-    p_frag->p_msg = p2;
+    p_frag->p_msg = p;
 
     // Finally, add the fragment onto the error stack trace.
     List__add_node( p_err->p_fragments, (void*)p_frag );

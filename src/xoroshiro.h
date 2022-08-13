@@ -14,7 +14,7 @@
 
 
 
-typedef volatile struct _xoroshiro256p_state_t xoroshiro256p_state_t;
+typedef struct _xoroshiro256p_state_t xoroshiro256p_state_t;
 
 
 

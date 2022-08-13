@@ -21,6 +21,10 @@
 
 // This enum is for multiplying the base pool size of a generator context.
 typedef enum _fuzz_gen_ctx_pool_type_t {
+    //   When memory is really tight, allocate only 1 MiB (which still is pretty large)
+    tiny = (1 << 0),
+    //   4 MiB "small" string pooling
+    small = (1 << 2),
     //   By default, "normal" contexts generate strings up to 16 MiB apiece.
     normal = (1 << 4),
     //   "Large" pools gobble 128 MiB...

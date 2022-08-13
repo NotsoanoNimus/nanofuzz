@@ -39,8 +39,9 @@ struct _fuzz_generator_context_t {
     state_t state;
     gen_pool_type type;
     fuzz_factory_t* p_factory;
-    const xoroshiro256p_state_t* p_prng;
+    xoroshiro256p_state_t* p_prng;
     unsigned char* p_data_pool;
+    unsigned char* p_pool_end;
 };
 
 
@@ -48,6 +49,7 @@ struct _fuzz_generator_context_t {
 // Create a new generator context for re/use to make string generation faster.
 fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
     if ( NULL == p_factory )  return NULL;
+    if ( (gen_pool_type)NULL == type )  type = normal;
 
     // Create the context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
@@ -56,7 +58,9 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     x->p_factory = p_factory;
     x->p_prng = xoroshiro__new( time(NULL) );
     x->p_data_pool = (unsigned char*)calloc( 1,
-        (type*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+        (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+    x->p_pool_end = 1 + (x->p_data_pool)
+        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char));
 
     return x;
 }
@@ -78,12 +82,90 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     if ( NULL == p_ctx )  return NULL;
 
     fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
+    unsigned char* p_current;
 
     pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
+    p_current = p_ctx->p_data_pool;
+
+    // Zero string buffer. TODO: Should time be wasted on this, or should the ctx hold the len of the last str
+    //   and clear to JUST that??
+    memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     // Let's do it
-    for ( size_t instr = 0; pip && end != pip->type; ) {
+    while ( pip && end != pip->type ) {
+        if ( NULL == pip )  return NULL;   // TODO: should this be here?
+
+        size_t processed = 0;
+
+        // The number of iterations selected will either be a single value,
+        //   or a number from a range of values. Hold onto your pants...
+        size_t iters =
+            (  ((pip->count).single > 0) * (pip->count).base  )
+            + (
+                ((pip->count).single < 1)
+                * ( xoroshiro__get_bounded( p_ctx->p_prng, (pip->count).base, (pip->count).high ) )
+            );
+//printf( "%lu iters\n", iters );
+
+        switch ( pip->type ) {
+
+            case variable : {
+                break;
+            }
+
+            case reference : {
+                break;
+            }
+
+            case string : {
+                // Catalog the length of the incoming static string.
+                size_t z = strlen( (char*)(pip->data) );
+
+                // Mindful of overflows.
+                if ( ((sizeof(char)*iters*z)+p_current) >= p_ctx->p_pool_end )  goto __gen_overflow;
+
+                // Write the string.
+                for ( ; processed < iters; processed++ ) {
+                    memcpy( p_current, (char*)(pip->data), z );
+                    p_current += z;
+                }
+
+                // Move to the next block.
+                pip++;
+                break;
+            }
+
+            case sub : {
+                
+
+                break;
+            }
+
+            case ret : {
+                break;
+            }
+
+            case end : {   // paranoia (see loop condition)
+                goto __gen_end;
+                break;
+            }
+
+            default : {
+                return NULL;   // TODO: should this be here?
+                break;
+            }
+
+        }
     }
+
+    __gen_end:
+        // Return the "completed" string.
+        return (const char*)(p_ctx->p_data_pool);
+
+    __gen_overflow:
+        // When a buffer is going to overflow, STOP and RESET!
+        memset( p_ctx->p_data_pool, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+        return NULL;
 }
 
 
