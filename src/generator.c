@@ -29,6 +29,7 @@ typedef struct _fuzz_generator_counter_t {
 typedef struct _fuzz_generator_state_vector_t {
     // Array of pointers to counters tracking each nest/subsequence level.
     counter_t* counter[FUZZ_MAX_NESTING_COMPLEXITY];
+    size_t nest_level;   // tracks the current index into ^
     void* p_fuzz_factory_base;   // base ptr to the fuzz factory's blob data
 } __attribute__((__packed__)) state_t;
 
@@ -53,7 +54,6 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 
     // Create the context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
-    (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
     x->type = type;
     x->p_factory = p_factory;
     x->p_prng = xoroshiro__new( time(NULL) );
@@ -61,6 +61,12 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
     x->p_pool_end = 1 + (x->p_data_pool)
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char));
+
+    // Allocate initial state vector values.
+    for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ )
+        *(((x->state).counter)+o) = (counter_t*)calloc( 1, sizeof(counter_t) );
+    (x->state).nest_level = 0;
+    (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
 
     return x;
 }
@@ -70,6 +76,13 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
     if ( p_ctx ) {
         if ( p_ctx->p_prng )  free( (void*)(p_ctx->p_prng) );
+
+        if ( p_ctx->p_data_pool )  free( p_ctx->p_data_pool );
+
+        for ( size_t u = 0; u < FUZZ_MAX_NESTING_COMPLEXITY; u++ )
+            if ( ((p_ctx->state).counter + u) )
+                free( (p_ctx->state).counter + u );
+
         free( p_ctx );
     }
 }
@@ -136,12 +149,36 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             }
 
             case sub : {
-                
+                // Get the pointer to the counter for the current nest level.
+                size_t* lvl = &((p_ctx->state).nest_level);
+                counter_t* p_ctr = *((p_ctx->state).counter + *lvl);
 
+                // Set the amount to generate and zero out the 'generated' counter.
+                memset( p_ctr, 0, sizeof(counter_t) );
+                p_ctr->how_many = iters;
+                p_ctr->generated = 0;
+
+                // Increase the nest level and move to the next block.
+                *lvl = (*lvl)+1;
+                pip++;
                 break;
             }
 
             case ret : {
+                // Get the pointer to the counter for the __PREVIOUS__ (outer) nest level.
+                size_t* lvl = &((p_ctx->state).nest_level);
+                counter_t* p_ctr = *((p_ctx->state).counter + *lvl - 1);
+
+                if ( p_ctr->generated < p_ctr->how_many ) {
+                    // Back the pip back to where it needs to be (we blindly trust it)
+                    //   and increase the generator count.
+                    pip -= *((size_t*)(pip->data));
+                    (p_ctr->generated)++;
+                } else {
+                    // The sub is over. Decrease the nest level and continue.
+                    *lvl = (*lvl)-1;
+                    pip++;
+                }
                 break;
             }
 
