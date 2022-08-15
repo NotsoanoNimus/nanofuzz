@@ -161,6 +161,9 @@ printf( "[N: %lu] [X: %u] [T: %u] [C: %lu]\n", (p_ctx->state).nest_level, (NULL 
             }
 
             case range : {
+
+                // Move to the next block.
+                pip++;
                 break;
             }
 

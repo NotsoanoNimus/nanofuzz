@@ -41,6 +41,7 @@ struct _fuzz_ctx_t {
 
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma );
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* const p_content );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern );
 
 
@@ -217,7 +218,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
             case range: {
                 const char* p_range_expl = 0;
 
-                fprintf( fp_stream, "Output some character in the range %s (%s times)",
+                fprintf( fp_stream, "Output some character in the range %s (%s times)\n",
                     p_range_expl, p_range_str );
                 break;
             }
@@ -305,7 +306,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     // Let's go!
 printf( "Parsing %lu bytes of input.\n", len );
     for ( ; (*p) && p < (p_pattern+len); p++ ) {
-printf( "READ: %c\n", *p );
+printf( "READ: %02x\n", *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
         switch ( *p ) {
@@ -435,7 +436,7 @@ printf( "READ: %c\n", *p );
                 p_new_block->type = range;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
-                int res = __range_parse_range( p_pattern_block, t );
+                int res = __range_parse_range( p_new_block, t );
                 free( (void*)t );
 
                 if ( 0 == res ) {
@@ -571,7 +572,7 @@ printf( "SUB: |%s|\n", p_sub );
 
                 // Create the ret node and point it back to 'p_new_block'.
                 fuzz_pattern_block_t* p_ret = NEW_PATTERN_BLOCK;
-                //*(p_nest_tracker+nest_level) = p_new_block; //<- DO NOT
+                // *(p_nest_tracker+nest_level) = p_new_block; //<- DO NOT
                 p_ret->type = ret;
 
                 size_t* p_sz = (size_t*)calloc( 1, sizeof(size_t) );
@@ -595,60 +596,33 @@ printf( "SUB: |%s|\n", p_sub );
             default : {
                 // Move 'p' along until it encounters a special char or the end.
                 const char* start = p;
-                while( *p ) {
-printf( "statstrch = %c\n", *p );
+
+                while ( *p ) {
                     for ( int j = 0; special_chars[j]; j++ ) {
                         if ( *p == special_chars[j] ) {
-printf( "--- FOUND %c\n", *p );
-                            p--;   //need to back-step by one
-                            goto __static_string_stop;
+                            p--;   // need to back-step by one ; TODO when outermost for-loop no long auto-incs 'p'
+                            goto __static_str_break;
                         }
                     }
-
                     p++;
                 }
 
-                // Code that reaches here either encountered the end of the pattern string
-                //   or the iterator encountered a special character.
-                __static_string_stop:
-//printf( "plabel: %c\n", *p );
-                    //if ( p > start ) {
-printf( "p1start: %c\n", *start );
-printf( "p1: %c\n", *p );
-                        p_new_block = NEW_PATTERN_BLOCK;
-                        *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
-                        char* z = (char*)strndup(  start, ( p-start + (1*('{' != *(p+1))) )  );
-                        p_new_block->type = string;
-                        p_new_block->data = z;
-                        (p_new_block->count).single = 1;
-                        (p_new_block->count).base = 1;
-                    //}
+                __static_str_break:
+                // Rewind another character if there's more than 1 static str char; e.g. '123{8}45' vs. '1{4}'.
+                //   Effectively, the next iteration of the switch-case will parse this lone-dupe itself.
+                //   But if the static string that's incoming is only one character, this does it now.
+                if ( (p-start) > 1 && ('{' == *(p+1)) )  p--;
 
-                    // If the coming special char is a '{' we need to catalog the current static string (if one was defined)
-                    //   and create another. Consider the sample string '1234{8}56' -- only '4' should be replicated 8 times.
-                    if ( '{' == *(p+1) ) {
-//printf( "p2: %c\n", *p );
-                        // If coming special character is a bracket then two new blocks need to be created.
-                        //   First, add the most recently-created node. Then update the pointer for its reuse further on.
-                        if ( p_new_block )  List__add_node( p_seq, p_new_block );
+                // Catalog the static string.
+                p_new_block = NEW_PATTERN_BLOCK;
+                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
+                char* z = (char*)strndup( start, (p-start+1) );
+                p_new_block->type = string;
+                p_new_block->data = z;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
 
-                        // Create the next static character.
-                        fuzz_pattern_block_t* p_pre_bracket_char = NEW_PATTERN_BLOCK;
-                        p_new_block = p_pre_bracket_char;   //see above
-
-                        unsigned char* z = (unsigned char*)calloc( 2, sizeof(unsigned char) );
-                        z[0] = (unsigned char)(*p);
-                        z[1] = (unsigned char)'\0';
-
-                        p_pre_bracket_char->type = string;
-                        p_pre_bracket_char->data = z;
-                        // Do not set the range/count property here -- the repetition seq will do it.
-
-                        // Set the new head of the nest.
-                        *((p_ctx->p_nest_tracker)+nest_level) = p_pre_bracket_char;
-                    }
-
-               break;
+                break;
             }
         }
 
@@ -664,7 +638,7 @@ printf( "p1: %c\n", *p );
     }
 
     // Assign the list to the factory and return it.
-printf( "List elements: %lu\n", List__get_count( p_seq ) );
+//printf( "List elements: %lu\n", List__get_count( p_seq ) );
     //if ( p_nest_tracker )  free( p_nest_tracker );
 
     return p_seq;
@@ -764,7 +738,10 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const ch
 //   [^0-31,127-255]
 // In all cases, the pattern searcher/parser here is going to seek the initial '^' for negation
 //   as well as any commas which may indicate multiple ranges.
-// TODO: Consider expanding the lexer to allow simple ascii character ranges. Maybe maybe maybe...
+// TODO: Consider expanding the lexer to allow simple ascii character ranges, e.g. 'a-z'. Maybe...
 // Params are: $1 - Pattern Block to fill; $2 - String to parse (between brackets)
-static inline int __range_parse_range( p_pattern_block, t ) {
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* const p_content ) {
+    if ( !p_pattern_block || !p_content )  return 0;
+
+    return 1;
 }
