@@ -16,18 +16,6 @@
 
 
 
-// A finalized, contiguous stream of blocks which is used to construct fuzzer output.
-typedef struct _fuzz_factory_t fuzz_factory_t;
-
-// A ranging structure used in the pattern blocks to determine the amount of times, if set,
-//   to repeat a block of pattern data.
-// Used in the pattern blocks to determine the range of times to output the block.
-typedef struct _fuzz_range_t {
-    unsigned char single;   // If non-zero, the 'base' value is the static amount to generate; no ranging.
-    unsigned short base;
-    unsigned short high;
-} __attribute__((__packed__)) fuzz_range_t;
-
 // Represents the different types of possible pattern blocks which can
 //   be added to the fuzz factory.
 typedef enum _pattern_block_type {
@@ -39,6 +27,29 @@ typedef enum _pattern_block_type {
     end
 } pattern_block_type;
 
+
+// A finalized, contiguous stream of blocks which is used to construct fuzzer output.
+typedef struct _fuzz_factory_t fuzz_factory_t;
+
+// A ranging structure used in the pattern blocks to determine the amount of times, if set,
+//   to repeat a block of pattern data. This is populated by the 'repetition' mechanism.
+// Interestingly, this same struct is used in the 'range' mechanism to apply restrictions.
+typedef struct _fuzz_repetition_t {
+    unsigned char single;   // If non-zero, 'base' value is amount to generate; no ranging.
+    unsigned short base;
+    unsigned short high;
+} __attribute__((__packed__)) fuzz_repetition_t;
+
+// A structure populated by the lexer's parsing of the 'range' mechanism.
+typedef struct _fuzz_range_t {
+    // A linked list might be too slow here because when using the ranges, one
+    //   would need to scan the array to 'randomly' select one of the possible
+    //   constraining ranges. Instead, set a limit, and each instance of this
+    //   struct will be limited to a max (customizable) ranges amount.
+    fuzz_repetition_t fragments[FUZZ_MAX_PATTERN_RANGE_FRAGMENTS];
+    size_t amount;
+} __attribute__((__packed__)) fuzz_range_t;
+
 // A block (or "piece") of an interpreted part of the input pattern information.
 typedef struct _fuzz_pattern_block_t {
     // The type of pattern block being constructed: string, reference, sub, etc.
@@ -47,10 +58,10 @@ typedef struct _fuzz_pattern_block_t {
     //   This could point to a string, another List, etc. depending on the type.
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
-    fuzz_range_t count;
+    fuzz_repetition_t count;
     // This label is the name of the variable assigned to the block, if any.
     const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-} fuzz_pattern_block_t;
+} __attribute__((__packed__)) fuzz_pattern_block_t;
 
 
 

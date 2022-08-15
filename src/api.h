@@ -19,6 +19,9 @@
 // Pattern nesting cannot exceed 5 layers of complexity.
 //   WARNING: Change this at your own peril.
 #define FUZZ_MAX_NESTING_COMPLEXITY 5
+// Maximum amount of separate items in a single 'range' mechanism (i.e. [1-2,3-4,5-6,...]).
+#define FUZZ_MAX_PATTERN_RANGE_FRAGMENTS 16
+
 
 
 #endif   /* _FUZZ_API_H */
