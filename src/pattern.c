@@ -34,6 +34,7 @@ struct _fuzz_ctx_t {
     size_t nest_level;
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
+    // Context-dependent list of varname-to-pattern-block associations.
 };
 
 
@@ -190,9 +191,34 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         // Based on the item's type, read some information about it.
         switch ( p->type ) {
 
+            case reference: {
+                // The first char in the 'reference' label string should always be one of the three types:
+                //   '@' - paste pre-generated content; '#' - get the LENGTH of the pre-gen content; '%' - regenerate/shuffle
+                //   Additionally, to avoid confusion, '$' is a NAMED DECLARATION for a subseq and is not a block on its own.
+                const char* p_reftype;
+                switch ( *((const char*)(p->data)) ) {
+                    case '@': {  p_reftype = "Paste pre-generated";  }
+                    case '#': {  p_reftype = "Output the length of the";  }
+                    case '%': {  p_reftype = "Shuffle or regenerate";  }
+                    default : {  fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" ); continue;  }
+                }
+
+                fprintf( fp_stream, "%s stored subsequence with name '%s' (%s times)\n",
+                    p_reftype, (const char*)((p->data)+1), p_range_str );
+                break;
+            }
+
             case string: {
                 fprintf( fp_stream, "Output static string: '%s' (%s times)\n",
                     (const char*)(p->data), p_range_str );
+                break;
+            }
+
+            case range: {
+                const char* p_range_expl = 0;
+
+                fprintf( fp_stream, "Output some character in the range %s (%s times)",
+                    p_range_expl, p_range_str );
                 break;
             }
 
@@ -257,7 +283,7 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_
 
 
 // Define a set of functional or syntactically special characters.
-static const char special_chars[] = "$\\[{()}]";
+static const char special_chars[] = "\\[{(<>)}]";
 // Macro to register a fuzz error inside a fuzz_ctx (the pattern_parse func mainly).
 #define FUZZ_ERR_IN_CTX(errtype,errstr) {\
     Error__add( p_ctx->p_err, p_ctx->nest_level, (p-p_pattern), errtype, errstr ); \
@@ -277,30 +303,161 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     p_seq = List__new( FUZZ_MAX_PATTERN_LENGTH );
 
     // Let's go!
-    printf( "Parsing %lu bytes of input.\n", len );
+printf( "Parsing %lu bytes of input.\n", len );
     for ( ; (*p) && p < (p_pattern+len); p++ ) {
-        printf( "READ: %c\n", *p );
+printf( "READ: %c\n", *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
-        switch( *p ) {
+        switch ( *p ) {
 
-            case '$':
+            // ********** ESCAPES **********
+            case '\\': {
+                // This should be pretty simple: get the char being escaped and enter it as a static str block.
+                char esc = *(p+1);
+                char esclow = esc;
+                char final;
+
+                if ( !esc ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "The escaped character could not be understood" );
+                }
+
+                if ( (int)esc >= 0x41 && (int)esc <= 0x5A )  esclow += 0x20;   // upper to lower case
+
+                // Get special types and convert them as needed.
+                switch ( esclow ) {
+                    case 'b' : {  final = (char)0x08; break;  }
+                    case 't' : {  final = (char)0x09; break;  }
+                    case 'n' : {  final = (char)0x0A; break;  }
+                    case 'f' : {  final = (char)0x0C; break;  }
+                    case 'r' : {  final = (char)0x0D; break;  }
+                    case 's' : {  final = ' '; break;  }
+                    default  : {  final = esc; break;  }
+                }
+
+                p_new_block = NEW_PATTERN_BLOCK;
+                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
+                p_new_block->type = string;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                p_new_block->data = (char*)calloc( 2, sizeof(char) );
+                *((char*)(p_new_block->data)) = final;
+                *((char*)(p_new_block->data)+1) = '\0';
+
+                p++;   //skips over the character being escaped since it's been handled
                 break;
+            }
 
+            // ********** VARIABLES/REFERENCES **********
+            case '<': {
+                // Make sure a closing angle-bracket is found.
+                const char* end = __seek_marker_end( p, '>' );
+                if ( NULL == end ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Pattern contains unclosed or empty variable statement '<>'" );
+                }
 
-            case '\\':
+                // Spin up the new block.
+                p_new_block = NEW_PATTERN_BLOCK;
+
+                // The length of the inner content must be upper-case and consist of:
+                //   + Operation specifier (1 char)
+                //   + Upper-case Label (1-8 chars)
+                // Format: <[$@#%]NAMENAME>
+                const char* start = p+1;
+                switch ( *start ) {
+
+                    case '$': {
+                        // When defining a NEW variable label, the previous node MUST be a 'ret' type, indicating
+                        //   that the program had just finished parsing a subsequence.
+                        if ( NULL == *((p_ctx->p_nest_tracker)+nest_level)
+                            || sub != (*((p_ctx->p_nest_tracker)+nest_level))->type )
+                        {
+                            free( p_new_block );
+                            FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                                "Labels '<!...>' can only be applied to subsequence '()' mechanisms" );
+                        }
+
+                        
+
+                        break;
+                    }
+
+                    case '@': {
+                        break;
+                    }
+
+                    case '#': {
+                        break;
+                    }
+
+                    case '%': {
+                        break;
+                    }
+
+                    default : {
+                        free( p_new_block );
+                        FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                            "Unrecognized variable '<>' statement type. Valid options are $, @, #, or %" );
+                        break;
+                    }
+                }
+
+                // Make sure the variable name referenced is 1-8 chars.
+                start++;
+                if ( (end-start) > 8 ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Variable '<>' names cannot be longer than 8 characters" );
+                } else if ( end-start < 1 ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Variable '<>' names must be at least 1 character in length" );
+                }
+
+                // Set 'p' to end. It will increment to the next character after the for-loop continues.
+                p = end;
                 break;
-
-
-            case '[':
+            }
+            case '>': {   //edge-case: unexpected '>'s
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected '>'. Please escape this character ('\\>')" );
                 break;
+            }
 
-            // ********** REPETITION **********
+            // ********** RANGES **********
+            case '[': {
+                // Find the end of the bracket.
+                const char* end = __seek_marker_end( p, ']' );
+                if ( NULL == end ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Pattern contains unclosed or empty range '[]'" );
+                }
+
+                // Get the content between the brackets and parse it.
+                const char* t = strndup( p+1, (end-1)-p );
+                p_new_block = NEW_PATTERN_BLOCK;
+                p_new_block->type = range;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                int res = __range_parse_range( p_pattern_block, t );
+                free( (void*)t );
+
+                if ( 0 == res ) {
+                    FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
+                        "Range '[]' statement syntax is not valid; please refer to the pattern documentation" );
+                }
+
+                // Set 'p' to end. It will increment to the character after ']' once the for-loop continues.
+                p = end;
+                break;
+            }
+            case ']': {   //edge-case: unexpected ']'s
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ']'. Please escape this character ('\\]')" );
+                break;
+            }
+
+            // ********** REPETITIONS **********
             case '{': {
                 // The current block ptr cannot be NULL.
                 if ( NULL == *((p_ctx->p_nest_tracker)+nest_level) ) {
                     FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
-                        "The repetition statement '{}' must follow a valid string or other pattern." )
+                        "The repetition statement '{}' must follow a valid string or other pattern" )
                 }
 
                 // Make sure a closing brace is found.
@@ -340,18 +497,18 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 break;
             }
             case '}': {   //edge-case: unexpected '}'s
-                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected '}'. Please escape this character ('\\}')." );
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected '}'. Please escape this character ('\\}')" );
                 break;
             }
 
-            // ********** SUBSEQUENCE (NEST) **********
+            // ********** SUBSEQUENCES (NESTS) **********
             case '(': {
                 // Play nicely. 1 is added here since the FUZZ_.. def is NOT 0-based, it's 1-based :)
                 if ( (nest_level+1) >= FUZZ_MAX_NESTING_COMPLEXITY ) {
                     // TODO: Fix the static string here!
                     FUZZ_ERR_IN_CTX( FUZZ_ERROR_TOO_MUCH_NESTING,
                         "Subsequence '()' statements can only be nested up to 5 times."
-                        " Consider simplifying your pattern." );
+                        " Consider simplifying your pattern" );
                 }
 
                 // Find the next closing parenthesis according to the coming nest level.
@@ -364,7 +521,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                     if ( pres > FUZZ_MAX_NESTING_COMPLEXITY ) {
                          FUZZ_ERR_IN_CTX( FUZZ_ERROR_TOO_MUCH_NESTING,
                             "Subsequence '()' statements can only be nested up to 5 times."
-                            " Consider simplifying your pattern." );
+                            " Consider simplifying your pattern" );
                     }
                 }
 
@@ -373,7 +530,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // If the nest level didn't shift around properly
                 if ( pres > nest_level ) {
                     FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX,
-                        "Subsequence '()' statements are not closed properly." );
+                        "Subsequence '()' statements are not closed properly" );
                 }
 
 
@@ -394,17 +551,15 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                 //// RECURSION: Prepare a new substring and parse it anew.
                 char* p_sub = (char*)strndup( (p+1), (p_seek-1-p) );
-printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
-
+printf( "SUB: |%s|\n", p_sub );
                 (p_ctx->nest_level)++;   // increase the nest level and enter
                 List_t* p_pre = __parse_pattern( p_ctx, p_sub );
                 (p_ctx->nest_level)--;   // ... and now leave the nest
-
                 free( p_sub );
 
                 // Make sure the returned list has some nodes. If not, problem.
                 if ( !p_pre || List__get_count( p_pre ) < 1 ) {
-                    char* const p_m = "Invalid, empty, or NULL branch inside Subsequence '()' statement.";
+                    char* const p_m = "Invalid, empty, or NULL branch inside Subsequence '()' statement";
                     FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, p_m );
                 }
 
@@ -432,19 +587,19 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 break;
             }
             case ')': {   //edge-case: unexpected ')'s
-                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ')'. Please escape this character ('\\)')." );
+                FUZZ_ERR_IN_CTX( FUZZ_ERROR_INVALID_SYNTAX, "Unexpected ')'. Please escape this character ('\\)')" );
                 break;
             }
 
-            // ********** STATIC STRING **********
+            // ********** STATIC STRINGS **********
             default : {
                 // Move 'p' along until it encounters a special char or the end.
                 const char* start = p;
                 while( *p ) {
-//printf( "statstrch = %c\n", *p );
+printf( "statstrch = %c\n", *p );
                     for ( int j = 0; special_chars[j]; j++ ) {
                         if ( *p == special_chars[j] ) {
-//printf( "--- FOUND %c\n", *p );
+printf( "--- FOUND %c\n", *p );
                             p--;   //need to back-step by one
                             goto __static_string_stop;
                         }
@@ -457,7 +612,8 @@ printf( "SEEK: (%c) %s\n", *p_seek, p_sub );
                 //   or the iterator encountered a special character.
                 __static_string_stop:
 //printf( "plabel: %c\n", *p );
-                    if ( p > start ) {
+                    //if ( p > start ) {
+printf( "p1start: %c\n", *start );
 printf( "p1: %c\n", *p );
                         p_new_block = NEW_PATTERN_BLOCK;
                         *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
@@ -466,7 +622,7 @@ printf( "p1: %c\n", *p );
                         p_new_block->data = z;
                         (p_new_block->count).single = 1;
                         (p_new_block->count).base = 1;
-                    }
+                    //}
 
                     // If the coming special char is a '{' we need to catalog the current static string (if one was defined)
                     //   and create another. Consider the sample string '1234{8}56' -- only '4' should be replicated 8 times.
@@ -598,4 +754,17 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const ch
     }
 
     return 1;
+}
+
+
+
+// Parse content in a range between two square brackets. Valid formats look something like:
+//   [0,12-17,128-255]
+//   [35]
+//   [^0-31,127-255]
+// In all cases, the pattern searcher/parser here is going to seek the initial '^' for negation
+//   as well as any commas which may indicate multiple ranges.
+// TODO: Consider expanding the lexer to allow simple ascii character ranges. Maybe maybe maybe...
+// Params are: $1 - Pattern Block to fill; $2 - String to parse (between brackets)
+static inline int __range_parse_range( p_pattern_block, t ) {
 }

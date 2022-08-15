@@ -37,6 +37,11 @@ typedef enum _fuzz_gen_ctx_pool_type_t {
 
 // Define a generator context to use, which must be associated with a factory.
 typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
+// Define the structure of generated data. This is simply a void-ptr to a blob, with a strict length.
+typedef struct _fuzz_str_t {
+    const void* output;
+    size_t length;
+} fuzz_str_t;
 
 
 
@@ -47,9 +52,9 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx );
 
 // Generate more data using the given factory.
 //   NOTE: The return value resides on the heap and must be freed when
-const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx );
+fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx );
 // Instead of returning heap data, manages the memory for the caller and
-//   writes the generated content to the given I/O stream.
+//   writes the generated content directly to the given I/O stream.
 void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to );
 
 

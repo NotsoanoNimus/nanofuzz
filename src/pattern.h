@@ -31,9 +31,9 @@ typedef struct _fuzz_range_t {
 // Represents the different types of possible pattern blocks which can
 //   be added to the fuzz factory.
 typedef enum _pattern_block_type {
-    variable = 1,
-    reference,
+    reference = 1,
     string,
+    range,
     sub,
     ret,
     end
@@ -41,7 +41,7 @@ typedef enum _pattern_block_type {
 
 // A block (or "piece") of an interpreted part of the input pattern information.
 typedef struct _fuzz_pattern_block_t {
-    // The type of pattern block being constructed: string, variable, reference, sub, etc.
+    // The type of pattern block being constructed: string, reference, sub, etc.
     pattern_block_type type;
     // Represents a pointer to the node's data.
     //   This could point to a string, another List, etc. depending on the type.

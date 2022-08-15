@@ -1,4 +1,4 @@
-# nanofuzz - Minimal, Expedient, """Smart""", & Efficient Fuzzing
+# nanofuzz - Minimal, Expedient, & Smart Fuzzing
 
 Nanofuzz is a simple C-based fuzzing tool designed for the sake of efficiency and ease-of-use for small- to medium-sized projects.
 It is optimized to create and return conforming content strings as quickly as possible, while still being random enough
@@ -15,9 +15,10 @@ able to practically use nanofuzz from the moment you compile it.
 
 ## The Goal: A Summary
 
-- Simple, flexible, performant, structured fuzzing.
+- Simple, flexible, performant, independent, structured fuzzing.
 - Utmost benchmarked speed via selection of efficient algorithms and branchless coding techniques (where it matters).
-- Extensible and easily integrated without disruption into various applications.
+- Extensible and easily integrated into various applications without disruption.
+- Operation on small, embedded, and/or otherwise-resource-critical systems.
 
 
 ## A Note Regarding Speed
@@ -56,23 +57,10 @@ This makes building very complex pattern sequences easy as they won't have to be
 
 ## Static Library
 
-***NOT YET IMPLEMENTED** Nanofuzz is also available as a static library for use with compiled applications for hook
+**NOT YET IMPLEMENTED**
+
+Nanofuzz is also available as a static library for use with compiled applications, for hook
 placements and callback event handlers on certain code-path changes or application signals.
-
-#### Ideas
-```c
-/**** .h ****/
-typedef struct _fuzz_str_t FuzzStr;
-typedef struct _fuzz_stats_t FuzzStats;
-
-/**** .c ****/
-struct _fuzz_str_t {
-    ...
-};
-struct _fuzz_stats_t {
-    ...
-};
-```
 
 
 ## Pattern Examples
@@ -108,6 +96,17 @@ Null bytes are simple to generate within content. A single null byte in the patt
 
 This can be useful when creating test strings to Base64-encode for BASIC authentication types/schemes,
 for example: `[a-z,A-Z,48-57,1-9]{1,32}[0][a-z,A-Z,48-57,1-9]{1,32}`
+
+
+## Algorithms
+
+For __random string generation__, nanofuzz uses the [Xoroshiro 256+](https://prng.di.unimi.it/#intro) PRNG algorithm,
+with a state vector initialized by a [Tiny Mersenne Twister 64](http://math.sci.hiroshima-u.ac.jp/m-mat/MT/TINYMT/index.html)
+implementation, which itself is seeded by the current time.
+
+No statistical tests have been run on the efficacy of this choice yet, but this will update when/if testing is done.
+
+There is of course a possibility of this selection changing or being expanded to include more PRNG sets in the future.
 
 
 ## TODOs

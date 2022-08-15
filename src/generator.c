@@ -59,8 +59,11 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     x->p_prng = xoroshiro__new( time(NULL) );
     x->p_data_pool = (unsigned char*)calloc( 1,
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
-    x->p_pool_end = 1 + (x->p_data_pool)
-        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char));
+    x->p_pool_end = (
+        1
+        + (x->p_data_pool)
+        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
+    );
 
     // Allocate initial state vector values.
     for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ )
@@ -72,7 +75,7 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 }
 
 
-// Deletes any allocated gen ctx resources.
+// Deletes any allocated gen ctx resources, but not 'deeply'.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
     if ( p_ctx ) {
         if ( p_ctx->p_prng )  free( (void*)(p_ctx->p_prng) );
@@ -91,11 +94,12 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
 
 // Generate a new fuzzer output string.
 //   In this function, SPEED IS ESSENTIAL to maximize throughput.
-const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
+fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     if ( NULL == p_ctx )  return NULL;
 
     fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
     unsigned char* p_current;
+    counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
 
     pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
     p_current = p_ctx->p_data_pool;
@@ -105,8 +109,16 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     // Let's do it
+printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
     while ( pip && end != pip->type ) {
         if ( NULL == pip )  return NULL;   // TODO: should this be here?
+
+        // If the current state has a nullified pointer set and the type isn't a ret or sub, keep moving.
+        if (  sub != pip->type && ret != pip->type && NULL != p_nullified  ) {
+//printf("\t[%u] wenull\n",pip->type);
+            pip++;
+            continue;
+        }
 
         size_t processed = 0;
 
@@ -118,20 +130,20 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 ((pip->count).single < 1)
                 * ( xoroshiro__get_bounded( p_ctx->p_prng, (pip->count).base, (pip->count).high ) )
             );
-//printf( "%lu iters\n", iters );
 
+        // Helpful debugging information.
+printf( "[N: %lu] [X: %u] [T: %u] [C: %lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
+
+        // The block type must determine the next behavior used in pattern generation.
         switch ( pip->type ) {
-
-            case variable : {
-                break;
-            }
 
             case reference : {
                 break;
             }
 
             case string : {
-                // Catalog the length of the incoming static string.
+                // Catalog the length of the incoming static string. NOTE: \x00 are NOT allowed in static
+                //   string block types (only ranges), so using a strxyz function is valid.
                 size_t z = strlen( (char*)(pip->data) );
 
                 // Mindful of overflows.
@@ -148,6 +160,10 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 break;
             }
 
+            case range : {
+                break;
+            }
+
             case sub : {
                 // Get the pointer to the counter for the current nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
@@ -157,6 +173,12 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 memset( p_ctr, 0, sizeof(counter_t) );
                 p_ctr->how_many = iters;
                 p_ctr->generated = 0;
+
+                // If the iters count for this sub is 0, everything proceeds as normal, but a '0'
+                //   count subsequence will kill everything inside the nest for this iteration.
+                //   So, this is the method used to do so quickly.
+                //   Also note, if nullified is already set, do NOT set it again.
+                if ( !iters && NULL == p_nullified )  p_nullified = p_ctr;
 
                 // Increase the nest level and move to the next block.
                 *lvl = (*lvl)+1;
@@ -169,14 +191,32 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 size_t* lvl = &((p_ctx->state).nest_level);
                 counter_t* p_ctr = *((p_ctx->state).counter + *lvl - 1);
 
+                // If 'nullified' is set, check the p_ctr address to see if it matches. If so,
+                //   unset the nullification and break out of the null'd sub. Regardless, don't
+                //   follow repeats/counts and just break out of the nullified inner sub.
+                if ( p_nullified ) {
+//printf( "Nullified ptr: %p   /// Counter ptr: %p\n", p_nullified, p_ctr );
+                    if ( p_ctr == p_nullified ) {
+                        p_nullified = NULL;
+                        p_ctr->how_many = 0;
+                        p_ctr->generated = 1;
+                    }
+                    goto __gen_ret_step_out;
+                }
+
+                // The counter should ALWAYS be ticked up when a 'ret' is encountered,
+                //   BEFORE the conditional.
+                (p_ctr->generated)++;
+
                 if ( p_ctr->generated < p_ctr->how_many ) {
                     // Back the pip back to where it needs to be (we blindly trust it)
                     //   and increase the generator count.
                     pip -= *((size_t*)(pip->data));
-                    (p_ctr->generated)++;
                 } else {
                     // The sub is over. Decrease the nest level and continue.
+                    __gen_ret_step_out:
                     *lvl = (*lvl)-1;
+//printf( "Step out to %lu\n", *lvl);
                     pip++;
                 }
                 break;
@@ -195,9 +235,14 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         }
     }
 
-    __gen_end:
-        // Return the "completed" string.
-        return (const char*)(p_ctx->p_data_pool);
+    // Allocate a COPY of the return data and return the struct ptr.
+    __gen_end: {}
+        fuzz_str_t* p_ret = (fuzz_str_t*)calloc( 1, sizeof(fuzz_str_t) );
+        p_ret->output = (const void*)calloc( (p_current - p_ctx->p_data_pool), sizeof(char) );
+        p_ret->length = (p_current - p_ctx->p_data_pool);
+
+        memcpy( (void*)p_ret->output, p_ctx->p_data_pool, (p_ret->length)*sizeof(char) );
+        return p_ret;
 
     __gen_overflow:
         // When a buffer is going to overflow, STOP and RESET!
@@ -208,7 +253,18 @@ const char* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
 // Write the output the an I/O stream directly.
 void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to ) {
-    const char* const p_tmp = Generator__get_next( p_ctx );
-    fprintf( fp_to, "%s", p_tmp );
+
+    if (  !fp_to || ferror( fp_to )  )  return;
+
+    const fuzz_str_t* const p_tmp = Generator__get_next( p_ctx );
+    if ( !p_tmp )  return;
+
+    // Write raw data to the output stream.
+    size_t bytes = fwrite( p_tmp->output, sizeof(char), p_tmp->length, fp_to );
+    if (  !bytes || ferror( fp_to )  )
+        fprintf( stderr, "Problem writing raw fuzzer output to the selected stream.\n" );
+
+    // Free the resource.
+    free( (void*)(p_tmp->output) );
     free( (void*)p_tmp );
 }

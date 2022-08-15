@@ -250,10 +250,18 @@ int main( int argc, char* const argv[] ) {
     fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory, normal );
     //print_hex( "Generator Context", (const char*)(p_genctx), 24 );
 
-    for ( size_t t = 0; t < amount_to_generate; t++ ) {
-        const char* p_str = Generator__get_next( p_genctx );
-        printf(  "FUZZ: %s\n", p_str  );
-//        print_hex( "Str", p_str, strlen(p_str) );
+    if ( amount_to_generate ) {
+        for ( size_t t = 0; t < amount_to_generate; t++ ) {
+            fuzz_str_t* p_str = Generator__get_next( p_genctx );
+            printf(  "FUZZ: %s\n", (const char*)(p_str->output)  );
+    //        print_hex( "Str", p_str, strlen(p_str) );
+        }
+    } else {
+        for ( ; ; ) {
+            fuzz_str_t* const p_str = Generator__get_next( p_genctx );
+            Generator__get_next( p_genctx );
+            printf( "FUZZ: %s\n", (const char*)(p_str->output) );
+        }
     }
 
 /*    printf( "Input content is %lu bytes long.\n", (unsigned long)strlen(p_pattern_contents) );
