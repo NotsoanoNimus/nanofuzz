@@ -40,8 +40,8 @@ struct _fuzz_ctx_t {
 
 
 // Some [important] local static functions.
-static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma );
-static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* const p_content );
+static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* p_content );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern );
 
 
@@ -216,6 +216,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
             }
 
             case range: {
+                // Ranges have a touch of complexity about them to explain since they're dynamic mechanisms.
                 const char* p_range_expl = 0;
 
                 fprintf( fp_stream, "Output some character in the range %s (%s times)\n",
@@ -643,7 +644,7 @@ static uint16_t __get_valid_uint16( const char* p_str ) {
 
 // $1 - Block to set range; $2 - Range's inner text content; v$3 - >0 if a comma is present to split the range.
 //   Once this method is called, all other syntactical checks are already completed; just parse.
-static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const char* p_content, int comma ) {
+static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma ) {
     if ( NULL == p_block )  return 0;
 
     if ( comma ) {
@@ -720,9 +721,205 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* p_block, const ch
 // In all cases, the pattern searcher/parser here is going to seek the initial '^' for negation
 //   as well as any commas which may indicate multiple ranges.
 // TODO: Consider expanding the lexer to allow simple ascii character ranges, e.g. 'a-z'. Maybe...
+// Another TODO: Add the context here, so errors can be appeneded and made more specific.
 // Params are: $1 - Pattern Block to fill; $2 - String to parse (between brackets)
-static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* const p_content ) {
-    if ( !p_pattern_block || !p_content )  return 0;
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* p_content ) {
+    if ( !p_pattern_block || !p_content || strnlen(p_content,3) < 1 )  return 0;
 
+
+    // Set the flag if true and advance.
+    int negated = ('^' == *p_content);
+    if ( negated ) {
+        p_content++;
+        if ( strnlen(p_content,3) < 1 )  return 0;   //another check
+    }
+
+    // Initial syntax check. Characters should only _ever_ consist of: [\^\d\-,] (^ can only be 1st)
+    int is_grammar = 0; //whether the previous character is grammatical or a number
+    for ( const char* x = p_content; (*x); x++ ) {
+        if (
+               !(*x)
+            || ( !isdigit((int)(*x)) && (',' != *x) && ('-' != *x) )
+            || ( is_grammar && !isdigit((int)(*x)) )
+        )  { return 0; }
+
+        is_grammar = !isdigit( (int)(*x) );
+    }
+    // The only 'single' character allowed is a number, not ^ or , or -
+    if (  1 == strnlen( p_content, 3 ) && !isdigit( (int)(*p_content) )  )  return 0;
+    // Commas or dashes cannot be the first or the last characters under any circumstances
+    if (
+           (',' == *p_content) || (',' == *(p_content+strlen(p_content)-1))
+        || ('-' == *p_content) || ('-' == *(p_content+strlen(p_content)-1))
+    )  return 0;
+
+
+    // --- By this point the content is verified to contain only #s, ',', and '-'.
+    // Create the range and populate it.
+    fuzz_range_t* p_range = (fuzz_range_t*)calloc( 1, sizeof(fuzz_range_t) );
+    fuzz_repetition_t frag = {0,0,0};
+    fuzz_repetition_t* p_frag = &frag;   //TODO clean up later
+//(fuzz_repetition_t*)calloc( 1, sizeof(fuzz_repetition_t) );
+
+    char *p_sep_save, *p_range_save, *sep_token, *range_token;
+    size_t amount = 0;
+
+    sep_token = strtok_r( (char*)p_content, ",", &p_sep_save );
+
+
+    // Iterate through each range, one loop per set of them, and enter them into the struct.
+    do {
+
+        if ( strlen(sep_token) < 1 )  continue;
+
+        range_token = NULL;
+        p_range_save = NULL;
+
+        amount++;   // inc and check
+        if ( amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS )
+            goto __range_parse_error;
+
+printf("SEP: |%s|\n", sep_token );
+
+        range_token = strtok_r( sep_token, "-", &p_range_save );
+        if ( strlen(range_token) < 1 )  goto __range_parse_error;
+
+        // Parse the low value, allowing an explicitly-given '0' value.
+        uint16_t low = __get_valid_uint16( range_token );
+        if ( (*range_token == '0') && !low )   //first char must be 0 AND atoi didn't get num
+            p_frag->base = 0;
+        else if ( low > 0 && low < 256 )
+            p_frag->base = low;
+        else
+            goto __range_parse_error;
+printf("-- LOW: |%d|\n", low );
+
+        if (  NULL != (range_token = strtok_r( NULL, "-", &p_range_save ))  ) {
+            // Parse the high value (if present), ensuring it's in-bounds and greater than low.
+            uint16_t high = __get_valid_uint16( range_token );
+            if ( high > low && high < 256 )
+                p_frag->high = high;
+            else
+                goto __range_parse_error;
+printf("-- HIGH: |%d|\n", high );
+
+        } else {
+            // Mark the block 'single' and set 'high' to 'low' too for the below comparison.
+printf("-- SINGLE.\n" );
+            p_frag->single = 1;
+            p_frag->high = low;
+        }
+
+        // Finally, ranges should not step on each other or overlap otherwise. [1-2,3-4,5-6] is
+        //   perfectly valid if someone is masochistic enough, but not [1-2,2-3,3-4,...]
+        for ( size_t i = 0; i < (amount-1); i++ ) {
+            fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
+            if ( !p_shard )  continue;
+printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, p_frag->base, p_frag->high );
+
+            if (
+                   ( p_shard->single && p_frag->single && p_shard->base == p_frag->base )
+                || ( p_shard->base <= p_frag->high && p_frag->base <= p_shard->high )
+            ) {  goto __range_parse_error;  }
+        }
+
+        // Store the fragment and move to the next range fragment.
+        memcpy(
+            (  ((fuzz_repetition_t*)&(p_range->fragments)) + amount - 1  ),
+            p_frag,
+            sizeof(fuzz_repetition_t)
+        );
+
+    } while (  NULL != (sep_token = strtok_r( NULL, ",", &p_sep_save ))  );
+
+
+    // If the entire range is being negated, then each valid fragment must be iterated.
+    if ( negated ) {
+        uint16_t checkpoint_start = 0, checkpoint = 0, scroll = 0, new_amount = 0;
+
+        // Copy in what was parsed to a temporary buffer and destroy the old data.
+        fuzz_repetition_t* p_parsed = (fuzz_repetition_t*)calloc(
+            FUZZ_MAX_PATTERN_RANGE_FRAGMENTS, sizeof(fuzz_repetition_t) );
+        memcpy( p_parsed, &(p_range->fragments[0]),
+            (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS*sizeof(fuzz_repetition_t)) );
+        memset( &(p_range->fragments[0]), 0,
+            (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS*sizeof(fuzz_repetition_t)) );
+
+        // Go through each item in the list for values 0 through 255 and stop at each
+        //   one along the way as it's encountered, in hopes to create a negative of
+        //   the given ranges,  e.g. [^4-8,10-12] ===> [0-3,9,13-255]
+        // TODO: Spaghetti
+        do {
+
+            for ( size_t pos = 0; pos < FUZZ_MAX_PATTERN_RANGE_FRAGMENTS; pos++ ) {
+                if ( scroll == (p_parsed+pos)->base ) {
+                    // If the negated range is bumping up against the front, don't add anything yet.
+                    if ( 0 == scroll )
+                        goto __range_negate_continue;
+                    // Likewise, if it's bumping the end, pretty much exit.
+                    if ( 255 == (p_parsed+pos)->high )
+                        goto __range_negate_break;
+                    // Chances are this is a consecutive negation a la [^1,2,3,...]
+                    if ( checkpoint_start == (p_parsed+pos)->base ) {
+                        goto __range_negate_adjmrkrs;
+                    }
+
+                    // Set the values.
+                    fuzz_repetition_t* x = &(p_range->fragments[new_amount]);
+                    x->base = checkpoint_start;
+                    x->high = checkpoint;
+                    x->single = (checkpoint_start == checkpoint);
+
+                    // Increment index.
+                    new_amount++;
+                    if ( new_amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS ) {
+                        free( (void*)p_parsed );
+                        goto __range_parse_error;
+                    }
+
+                    // New markers.
+                    __range_negate_adjmrkrs:
+                    {}
+                    if ( !((p_parsed+pos)->single) ) {
+                        scroll = (p_parsed+pos)->high;   //prepare to ++ to step to the next range.
+                        checkpoint_start = ((p_parsed+pos)->high) + 1;
+                    } else {
+                        checkpoint_start = scroll + 1;
+                    }
+                }
+            }
+
+            __range_negate_continue:
+            {}
+            checkpoint = scroll;
+            scroll++;
+
+        } while ( scroll < 255 );
+
+        // Set the final range which bumps to 255 as applicable.
+        fuzz_repetition_t* x = &(p_range->fragments[new_amount]);
+        x->base = checkpoint_start;
+        x->high = 255;
+        x->single = (255 == checkpoint_start);
+
+        __range_negate_break:
+        free( (void*)p_parsed );
+        amount = new_amount;
+    }
+
+
+    // Set the amount. This should be it for the range.
+    if ( amount <= 0 )  goto __range_parse_error;
+    p_range->amount = amount;
+printf( "+++ GOT '%lu' RANGES.\n", amount );
+
+    // Assign the range to the pattern block's data and return "OK".
+    p_pattern_block->data = (void*)p_range;
     return 1;
+
+
+    // Called when there's a problem beyond the range calloc for any reason.
+    __range_parse_error:
+        if ( p_range )  free( (void*)p_range );
+        return 0;
 }

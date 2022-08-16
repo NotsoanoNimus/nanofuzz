@@ -56,6 +56,7 @@ typedef struct _fuzz_pattern_block_t {
     pattern_block_type type;
     // Represents a pointer to the node's data.
     //   This could point to a string, another List, etc. depending on the type.
+    //   If this pointer is NOT NULL, it is assumed the referenced data is free-able.
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
     fuzz_repetition_t count;
