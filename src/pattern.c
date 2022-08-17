@@ -333,9 +333,9 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     p_seq = List__new( FUZZ_MAX_PATTERN_LENGTH );
 
     // Let's go!
-printf( "Parsing %lu bytes of input.\n", len );
+//printf( "Parsing %lu bytes of input.\n", len );
     for ( ; p < (p_pattern+len) && (*p); p++ ) {
-printf( "READ: %02x\n", *p );
+//printf( "READ: %02x\n", *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
 //TODO: Spaghetti. Need to refactor quite a few things here once the application is operational.
@@ -565,7 +565,7 @@ printf( "READ: %02x\n", *p );
 
                 //// RECURSION: Prepare a new substring and parse it anew.
                 char* p_sub = (char*)strndup( (p+1), (p_seek-1-p) );
-printf( "SUB: |%s|\n", p_sub );
+//printf( "SUB: |%s|\n", p_sub );
                 (p_ctx->nest_level)++;   // increase the nest level and enter
                 List_t* p_pre = __parse_pattern( p_ctx, p_sub );
                 (p_ctx->nest_level)--;   // ... and now leave the nest
@@ -641,13 +641,17 @@ printf( "SUB: |%s|\n", p_sub );
         // Add the (maybe-)populated node onto the list and continue;
         if ( p_new_block )
             List__add_node( p_seq, p_new_block );
+
         continue;
+
 
         __err_exit:
             if ( p_new_block )  free( p_new_block );
+
+            // Even on crashes, collate the list so its contents can be deleted properly.
             fuzz_factory_t* x = __compress_List_to_factory( p_seq );
             PatternFactory__delete( x );
-//            List__delete( p_seq );
+
             return NULL;
     }
 
@@ -812,7 +816,7 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         if ( amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS )
             goto __range_parse_error;
 
-printf("SEP: |%s|\n", sep_token );
+//printf("SEP: |%s|\n", sep_token );
 
         range_token = strtok_r( sep_token, "-", &p_range_save );
         if ( strlen(range_token) < 1 )  goto __range_parse_error;
@@ -825,7 +829,7 @@ printf("SEP: |%s|\n", sep_token );
             p_frag->base = low;
         else
             goto __range_parse_error;
-printf("-- LOW: |%d|\n", low );
+//printf("-- LOW: |%d|\n", low );
 
         if (  NULL != (range_token = strtok_r( NULL, "-", &p_range_save ))  ) {
             // Parse the high value (if present), ensuring it's in-bounds and greater than low.
@@ -834,11 +838,11 @@ printf("-- LOW: |%d|\n", low );
                 p_frag->high = high;
             else
                 goto __range_parse_error;
-printf("-- HIGH: |%d|\n", high );
+//printf("-- HIGH: |%d|\n", high );
 
         } else {
             // Mark the block 'single' and set 'high' to 'low' too for the below comparison.
-printf("-- SINGLE.\n" );
+//printf("-- SINGLE.\n" );
             p_frag->single = 1;
             p_frag->high = low;
         }
@@ -848,7 +852,7 @@ printf("-- SINGLE.\n" );
         for ( size_t i = 0; i < (amount-1); i++ ) {
             fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
             if ( !p_shard )  continue;
-printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, p_frag->base, p_frag->high );
+//printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, p_frag->base, p_frag->high );
 
             if (
                    ( p_shard->single && p_frag->single && p_shard->base == p_frag->base )
@@ -946,7 +950,7 @@ printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high
     // Set the amount. This should be it for the range.
     if ( amount <= 0 )  goto __range_parse_error;
     p_range->amount = amount;
-printf( "+++ GOT '%lu' RANGES.\n", amount );
+//printf( "+++ GOT '%lu' RANGES.\n", amount );
 
     // Assign the range to the pattern block's data and return "OK".
     p_pattern_block->data = (void*)p_range;

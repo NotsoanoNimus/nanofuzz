@@ -224,7 +224,7 @@ int main( int argc, char* const argv[] ) {
 
     // If FLAG_NO_SCRUB_WHITESPACE is NOT set, scrub out any whitespace characters from the input.
     //   This includes 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20.
-    if ( p_pattern_contents && (app_flags & FLAG_NO_SCRUB_WHITESPACE) ) {
+    if ( p_pattern_contents && !(app_flags & FLAG_NO_SCRUB_WHITESPACE) ) {
         char *p_i, *p_j;
         for ( p_i = p_pattern_contents; *(p_i); ) {
             switch ( (int)(*p_i) ) {
@@ -260,6 +260,7 @@ int main( int argc, char* const argv[] ) {
         exit( 1 );
     } else {
         // TEST CODE //
+/*
         printf( "Data size: %lu (%lu)\n",
             PatternFactory__get_data_size( p_pattern_factory ),
             PatternFactory__get_count( p_pattern_factory ) );
@@ -272,18 +273,17 @@ int main( int argc, char* const argv[] ) {
         // Explain the factory.
         PatternFactory__explain( stdout, p_pattern_factory );
         ///////////////
+*/
     }
 
-    // TEST CODE
-    printf( "Generating '%lu' values. OK\n", amount_to_generate );
+    // TEST CODE //
+//    printf( "Generating '%lu' values. OK\n", amount_to_generate );
     fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory, normal );
-    //debug__print_hex( "Generator Context", (const char*)(p_genctx), 24 );
 
     if ( amount_to_generate ) {
         for ( size_t t = 0; t < amount_to_generate; t++ ) {
             fuzz_str_t* p_str = Generator__get_next( p_genctx );
             printf(  "FUZZ: %s\n", (const char*)(p_str->output)  );
-    //        debug__print_hex( "Str", p_str, strlen(p_str) );
             free( (void*)p_str->output ); free( p_str );
         }
     } else {
@@ -294,20 +294,7 @@ int main( int argc, char* const argv[] ) {
             free( (void*)p_str->output ); free( p_str );
         }
     }
-
-/*    printf( "Input content is %lu bytes long.\n", (unsigned long)strlen(p_pattern_contents) );
-    printf( "Read bytes:\n" );
-    debug__print_hex( "Pattern Contents", p_pattern_contents, strlen( p_pattern_contents ) );
-    printf( "\n\n" );
-    printf( "%lu\n", time(NULL) );
-    xoroshiro256p_state_t* rand_state = xoroshiro__new( time(NULL) );
-    for( int i = 0; i < 10; i++ )
-        printf( "%lu\n", xoroshiro__get_next( rand_state ) );
-    for( int i = 0; i < 10; i++ )
-        printf( "%d\n", xoroshiro__get_byte( rand_state ) );
-    for( int i = 0; i < 10; i++ )
-        printf( "%d\n", xoroshiro__get_bounded_byte( rand_state, 5, 15 ) );//*/
-    // -- END TESTS
+    ///////////////
 
 
     // Free resource allocations. All done.

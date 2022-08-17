@@ -109,7 +109,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     // Let's do it
-printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
+//printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
     while ( pip && end != pip->type ) {
         if ( NULL == pip )  return NULL;   // TODO: should this be here?
 
@@ -132,7 +132,7 @@ printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
             );
 
         // Helpful debugging information.
-printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
+//printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
 
         // The block type must determine the next behavior used in pattern generation.
         switch ( pip->type ) {
@@ -183,7 +183,7 @@ printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL
                             char_select = p_select->base;
                         else
                             char_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, p_select->base, p_select->high );
-printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, char_select );
+//printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, char_select );
 
                         // Copy the selected character onto the output pool and increment.
                         *(p_current) = (unsigned char)char_select;
