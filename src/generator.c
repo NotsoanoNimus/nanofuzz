@@ -84,7 +84,7 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
 
         for ( size_t u = 0; u < FUZZ_MAX_NESTING_COMPLEXITY; u++ )
             if ( ((p_ctx->state).counter + u) )
-                free( (p_ctx->state).counter + u );
+                free( *((p_ctx->state).counter + u) );
 
         free( p_ctx );
     }

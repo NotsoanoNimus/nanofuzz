@@ -18,8 +18,8 @@ struct _linked_list_t {
 
 
 // "Private" method to set the list's head node.
-void __List__set_head( List_t* list, ListNode_t* val ) {
-    if ( list == NULL )  return;
+static void __List__set_head( List_t* list, ListNode_t* val ) {
+    if ( NULL == list )  return;
     list->head = val;
 }
 
@@ -35,16 +35,17 @@ List_t* List__new( size_t max_size ) {
 // Delete and destroy a linked-list object from the heap.
 void List__delete( List_t* list ) {
     List__clear( list );
-    if ( list != NULL )  free( list );
+    if ( NULL != list )  free( list );
 }
 
 // Clear all items from a linked-list object.
 void List__clear( List_t* list ) {
-    if ( list == NULL )  return;
+    if ( NULL == list )  return;
 
     ListNode_t* x = List__get_head( list );
-    while ( x != NULL ) {
+    while ( NULL != x ) {
         ListNode_t* x_shadow = x->next;
+        if ( x->node )  free( x->node );
         free( x );
         x = x_shadow;
     }
@@ -72,14 +73,14 @@ List_t* List__reverse( List_t* list ) {
 // Get the amount of nodes in the linked-list object.
 size_t List__get_count( List_t* list ) {
     size_t count = 0;
-    for ( ListNode_t* x = List__get_head( list ); x != NULL; x = x->next )  count++;
+    for ( ListNode_t* x = List__get_head( list ); NULL != x; x = x->next )  count++;
     return count;
 }
 
 
 // Add an entry onto the end of a linked-list.
 bool List__add_node( List_t* list, void* node ) {
-    if ( list == NULL || node == NULL )  return false;
+    if ( NULL == list || NULL == node )  return false;
 
     if ( List__get_count( list ) >= list->max_size )  return false;
 
@@ -93,13 +94,13 @@ bool List__add_node( List_t* list, void* node ) {
 
 // Delete an entry from within a linked list.
 ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
-    if ( list == NULL || node == NULL )  return NULL;
+    if ( NULL == list || NULL == node )  return NULL;
 
     ListNode_t* x = List__get_head( list );
-    if ( x == NULL ) {
+    if ( NULL == x ) {
         // Empty list; nothing to remove.
         return NULL;
-    } else if ( x == node && x->next == NULL ) {
+    } else if ( x == node && NULL == x->next ) {
         // When the node to remove is the only list item, free it and set the head to null.
         free( node );
         __List__set_head( list, NULL );
@@ -109,7 +110,7 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
     // Automatically move to the next node after pointing a 'shadow' to the head node.
     ListNode_t* prev_node = List__get_head( list );
     x = x->next;
-    while ( x != NULL ) {
+    while ( NULL != x ) {
         if ( x == node ) {
             // Point the previous node to the next node, thereby bridging OVER this list item and removing it.
             prev_node->next = x->next;
@@ -128,10 +129,10 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
 
 // Get a list node using the specified property at the given offset of the given size and with the given value.
 ListNode_t* List__get_node( List_t* list, int node_property_offset, void* property_value, size_t property_size ) {
-    if ( property_value == NULL || property_size <= 0 )  return NULL;
+    if ( NULL == property_value || property_size <= 0 )  return NULL;
 
     // For each node in the list, check the property value at the given offset against the provided comparator.
-    for ( ListNode_t* x = List__get_head( list ); x != NULL; x = x->next ) {
+    for ( ListNode_t* x = List__get_head( list ); NULL != x; x = x->next ) {
         if ( memcmp( ((x->node)+node_property_offset), property_value, property_size ) == 0 )  return x;
     }
 
@@ -142,7 +143,7 @@ ListNode_t* List__get_node( List_t* list, int node_property_offset, void* proper
 
 // Fetch the head of a linked-list object.
 ListNode_t* List__get_head( List_t* list ) {
-    if ( list == NULL )  return NULL;
+    if ( NULL == list )  return NULL;
     return list->head;
 }
 
@@ -152,8 +153,8 @@ ListNode_t* List__get_tail( List_t* list ) {
     size_t loop_stop = 0;
 
     // Iterate the list to its end, but also add in a loop prevention mechanism, just in case.
-    while ( x != NULL && loop_stop < (SIZE_MAX-1) ) {
-        if ( x->next == NULL )  return x;
+    while ( NULL != x && loop_stop < (SIZE_MAX-1) ) {
+        if ( NULL == x->next )  return x;
         x = x->next;
         loop_stop++;
     }

@@ -20,8 +20,6 @@ struct _fuzz_factory_t {
     void* node_seq;
     // ... of size count, each = sizeof(fuzz_pattern_block_t)
     size_t count;
-    // Keep a pointer to the underlying list. This makes everything easy to destroy.
-    List_t* _list;
 };
 
 // Creates a context for a fuzzing pattern parser. This is so static variables
@@ -91,7 +89,6 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     // Fetch the list items count, calloc, set each cell, and create the factory.
     fuzz_factory_t* x = (fuzz_factory_t*)calloc( 1, sizeof(fuzz_factory_t) );
     x->count = ( List__get_count( p_list ) + 1 );   // +1 for 'end' node
-    x->_list = p_list;
 
     // Create the new blob and start filling it out.
     unsigned char* scroll = (unsigned char*)calloc( x->count, sizeof(fuzz_pattern_block_t) );
@@ -111,7 +108,8 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     p_end->type = end;
     p_end->data = NULL;   // count and label don't matter, just the 'end' type
 
-    // Now insert from the list.
+    // Now insert from the list. This follows the list node pointer and raw-ly copies data.
+    //   Effectively, this means the list can be wholly discarded once this is done.
     ListNode_t* y = List__get_head( p_list );
     while ( NULL != y && scroll >= (unsigned char*)(x->node_seq) ) {
         scroll -= sizeof(fuzz_pattern_block_t);
@@ -120,6 +118,7 @@ static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     }
 
     // Return the built factory.
+    List__delete( p_list );
     return x;
 }
 
@@ -131,28 +130,34 @@ void* PatternFactory__get_data( fuzz_factory_t* p_fact ) {
 }
 
 
-
 // Get the size of the pattern factory's data blob.
 size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact ) {
     return (size_t)(p_fact->count * sizeof(fuzz_pattern_block_t));
 }
 
 
+// Get the attached factory count of blobbed pattern blocks.
+size_t PatternFactory__get_count( fuzz_factory_t* p_fact ) {
+    return p_fact->count;
+}
+
+
 
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
 void PatternFactory__delete( fuzz_factory_t* p_fact ) {
-    // TODO: Rather than just blindly deleting, get the type of each block and delete accordingly.
     if ( NULL == p_fact )  return;
 
-    fuzz_pattern_block_t* x = (fuzz_pattern_block_t*)&(p_fact->node_seq);
+    // We assume that any nodes/blocks in the node sequence have free-able memory in their
+    //   data voidptr, so long as the value != null (such as 'end' blocks).
+    fuzz_pattern_block_t* p_base_block = (fuzz_pattern_block_t*)(p_fact->node_seq);
     for ( size_t i = 0; i < p_fact->count; i++ ) {
-        if ( NULL != x && x->data )  free( x->data );
-        x++;
+        fuzz_pattern_block_t* x = (p_base_block + i);
+        if ( NULL != x && x->data )
+            free( x->data );
     }
 
+    // Free the pattern_block blob.
     if ( NULL != p_fact->node_seq )  free( p_fact->node_seq );
-
-    if ( NULL != p_fact->_list )  List__delete( p_fact->_list );
 
     free( p_fact );
 }
@@ -198,15 +203,20 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 //   Additionally, to avoid confusion, '$' is a NAMED DECLARATION for a subseq and is not a block on its own.
                 const char* p_reftype;
                 switch ( *((const char*)(p->data)) ) {
-                    case '@': {  p_reftype = "Paste pre-generated";  }
-                    case '#': {  p_reftype = "Output the length of the";  }
-                    case '%': {  p_reftype = "Shuffle or regenerate";  }
-                    default : {  fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" ); continue;  }
+                    case '@': {  p_reftype = "Paste pre-generated"; break;  }
+                    case '#': {  p_reftype = "Output the length of the"; break;  }
+                    case '%': {  p_reftype = "Shuffle or regenerate"; break;  }
+                    default : {
+                        fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" );
+                        goto __explain_ref_unknown;
+                    }
                 }
 
                 fprintf( fp_stream, "%s stored subsequence with name '%s' (%s times)\n",
                     p_reftype, (const char*)((p->data)+1), p_range_str );
-                break;
+
+                __explain_ref_unknown:
+                    break;
             }
 
             case string: {
@@ -326,7 +336,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
     // Let's go!
 printf( "Parsing %lu bytes of input.\n", len );
-    for ( ; (*p) && p < (p_pattern+len); p++ ) {
+    for ( ; p < (p_pattern+len) && (*p); p++ ) {
 printf( "READ: %02x\n", *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
@@ -523,7 +533,7 @@ printf( "READ: %02x\n", *p );
                 //   end of the opening nest, regardless of () nests between.
                 size_t pres = (nest_level+1);
                 const char* p_seek = (p+1);
-                for ( ; (*p_seek) && pres > nest_level; p_seek++ ) {
+                for ( ; pres > nest_level && p_seek < (p_pattern+len) && (*p_seek); p_seek++ ) {
                     pres += (  ((*p_seek == '(')*1) + ((*p_seek == ')')*-1)  );
                     if ( pres > FUZZ_MAX_NESTING_COMPLEXITY ) {
                          FUZZ_ERR_IN_CTX( "Subsequence '()' statements can only be nested up to 5 times."

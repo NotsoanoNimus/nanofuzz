@@ -259,7 +259,9 @@ int main( int argc, char* const argv[] ) {
         exit( 1 );
     } else {
         // TEST CODE //
-        printf( "Data size: %lu\n", PatternFactory__get_data_size( p_pattern_factory ) );
+        printf( "Data size: %lu (%lu)\n",
+            PatternFactory__get_data_size( p_pattern_factory ),
+            PatternFactory__get_count( p_pattern_factory ) );
         debug__print_hex(
             "factory node_seq",
             PatternFactory__get_data( p_pattern_factory ),
@@ -305,12 +307,10 @@ int main( int argc, char* const argv[] ) {
     // -- END TESTS
 
 
-    // Initialize the pattern parser. A lot going on 'behind the scenes' here.
-    // TODO: initialize
-
-    // Free unnecessary allocations.
-//    PatternFactory__delete( p_pattern_factory );
+    // Free resource allocations. All done.
     free( p_pattern_contents );
+    Generator__delete_context( p_genctx );
+    PatternFactory__delete( p_pattern_factory );
 }
 
 

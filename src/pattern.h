@@ -70,6 +70,8 @@ typedef struct _fuzz_pattern_block_t {
 void* PatternFactory__get_data( fuzz_factory_t* p_fact );
 // Get the size of the data pool for a given factory.
 size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact );
+// Get the attached factory count of blobbed pattern blocks.
+size_t PatternFactory__get_count( fuzz_factory_t* p_fact );
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
 void PatternFactory__delete( fuzz_factory_t* p_fact );
 // Explain the procedural string generation process, outputting to the given stream/file.
