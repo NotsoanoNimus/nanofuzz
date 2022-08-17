@@ -217,10 +217,25 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 
             case range: {
                 // Ranges have a touch of complexity about them to explain since they're dynamic mechanisms.
-                const char* p_range_expl = 0;
+                fuzz_range_t* p_range = (fuzz_range_t*)(p->data);
+                if ( !p_range || !(p_range->amount) ) {
+                    fprintf( fp_stream, "~~~~~ Misunderstood or empty range. Problem!\n" );
+                    break;
+                }
 
-                fprintf( fp_stream, "Output some character in the range %s (%s times)\n",
+                char* p_range_expl = (char*)calloc( p_range->amount, 13 ); //13 chars each x the max amount of rep objs
+                char* scroll = p_range_expl;
+
+                for ( size_t i = 0; i < p_range->amount; i++ ) {
+                    snprintf( scroll, 13, "%3d to %3d, ", (p_range->fragments[i]).base, (p_range->fragments[i]).high );
+                    scroll += 12;
+                }
+                *(scroll - 2) = '\0';
+
+                fprintf( fp_stream, "Output some character in the range [%s] (%s times)\n",
                     p_range_expl, p_range_str );
+
+                free( (void*)p_range_expl );
                 break;
             }
 
@@ -340,6 +355,7 @@ printf( "READ: %02x\n", *p );
                     case 'b' : {  final = (char)0x08; break;  }
                     case 't' : {  final = (char)0x09; break;  }
                     case 'n' : {  final = (char)0x0A; break;  }
+                    case 'v' : {  final = (char)0x0B; break;  }
                     case 'f' : {  final = (char)0x0C; break;  }
                     case 'r' : {  final = (char)0x0D; break;  }
                     case 's' : {  final = ' '; break;  }
@@ -593,7 +609,7 @@ printf( "SUB: |%s|\n", p_sub );
                 // Rewind another character if there's more than 1 static str char; e.g. '123{8}45' vs. '1{4}'.
                 //   Effectively, the next iteration of the switch-case will parse this lone-dupe itself.
                 //   But if the static string that's incoming is only one character, this does it now.
-                if ( (p-start) > 1 && ('{' == *(p+1)) )  p--;
+                if ( (p-start) > 0 && ('{' == *(p+1)) )  p--;
 
                 // Catalog the static string.
                 p_new_block = NEW_PATTERN_BLOCK;
@@ -835,76 +851,78 @@ printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high
 
     // If the entire range is being negated, then each valid fragment must be iterated.
     if ( negated ) {
-        uint16_t checkpoint_start = 0, checkpoint = 0, scroll = 0, new_amount = 0;
-
-        // Copy in what was parsed to a temporary buffer and destroy the old data.
-        fuzz_repetition_t* p_parsed = (fuzz_repetition_t*)calloc(
-            FUZZ_MAX_PATTERN_RANGE_FRAGMENTS, sizeof(fuzz_repetition_t) );
-        memcpy( p_parsed, &(p_range->fragments[0]),
-            (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS*sizeof(fuzz_repetition_t)) );
-        memset( &(p_range->fragments[0]), 0,
-            (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS*sizeof(fuzz_repetition_t)) );
-
-        // Go through each item in the list for values 0 through 255 and stop at each
-        //   one along the way as it's encountered, in hopes to create a negative of
-        //   the given ranges,  e.g. [^4-8,10-12] ===> [0-3,9,13-255]
-        // TODO: Spaghetti
-        do {
-
-            for ( size_t pos = 0; pos < FUZZ_MAX_PATTERN_RANGE_FRAGMENTS; pos++ ) {
-                if ( scroll == (p_parsed+pos)->base ) {
-                    // If the negated range is bumping up against the front, don't add anything yet.
-                    if ( 0 == scroll )
-                        goto __range_negate_continue;
-                    // Likewise, if it's bumping the end, pretty much exit.
-                    if ( 255 == (p_parsed+pos)->high )
-                        goto __range_negate_break;
-                    // Chances are this is a consecutive negation a la [^1,2,3,...]
-                    if ( checkpoint_start == (p_parsed+pos)->base ) {
-                        goto __range_negate_adjmrkrs;
-                    }
-
-                    // Set the values.
-                    fuzz_repetition_t* x = &(p_range->fragments[new_amount]);
-                    x->base = checkpoint_start;
-                    x->high = checkpoint;
-                    x->single = (checkpoint_start == checkpoint);
-
-                    // Increment index.
-                    new_amount++;
-                    if ( new_amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS ) {
-                        free( (void*)p_parsed );
-                        goto __range_parse_error;
-                    }
-
-                    // New markers.
-                    __range_negate_adjmrkrs:
-                    {}
-                    if ( !((p_parsed+pos)->single) ) {
-                        scroll = (p_parsed+pos)->high;   //prepare to ++ to step to the next range.
-                        checkpoint_start = ((p_parsed+pos)->high) + 1;
-                    } else {
-                        checkpoint_start = scroll + 1;
-                    }
-                }
+        // Order the elements. They're already limited to not overlap so use selection sorting.
+        size_t i, j, min_idx;
+        for ( i = 0; i < (amount-1); i++ ) {
+            min_idx = i;
+            for ( j = i+1; j < amount; j++ ) {
+                // --- if ( frag[j].base < frag[min_idx].base )
+                if ( p_range->fragments[j].base < p_range->fragments[min_idx].base )
+                    min_idx = j;
             }
 
-            __range_negate_continue:
-            {}
-            checkpoint = scroll;
-            scroll++;
+            // Simply swapping stuff around.
+            // --- obj = frag[min_idx]
+            fuzz_repetition_t obj = p_range->fragments[min_idx];
+            // --- frag[min_idx] = frag[i]
+            p_range->fragments[min_idx] = p_range->fragments[i];
+            // --- frag[i] = obj
+            p_range->fragments[i] = obj;
+        }
 
-        } while ( scroll < 255 );
+        // Now create the inverse of the sequence.
+        fuzz_repetition_t* p_inv = (fuzz_repetition_t*)calloc(
+            FUZZ_MAX_PATTERN_RANGE_FRAGMENTS, sizeof(fuzz_repetition_t) );
 
-        // Set the final range which bumps to 255 as applicable.
-        fuzz_repetition_t* x = &(p_range->fragments[new_amount]);
-        x->base = checkpoint_start;
-        x->high = 255;
-        x->single = (255 == checkpoint_start);
+        // Slide from left-to-right on the ordered nodes and get the gaps.
+        fuzz_repetition_t *p, *prev, *p_new;
+        size_t new_amount;
+        for (
+            new_amount = 0,
+                prev = NULL,
+                p_new = p_inv,
+                p = &(p_range->fragments[0]);
 
-        __range_negate_break:
-        free( (void*)p_parsed );
+            p < (((fuzz_repetition_t*)&(p_range->fragments[0])) + amount);
+
+            prev = p,
+                p++
+        ) {
+
+            // Don't do anything if the base char is 0.
+            if ( 0 == p->base )  continue;
+            // If this block's base is equal to prev's high +1, it's a sequential list ([^1,2,3,...]).
+            else if ( prev && p->base == ((prev->high)+1) )  continue;
+
+            // Bounds check.
+            if ( (p_new - p_inv) >= (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS * sizeof(fuzz_repetition_t)) )
+                goto __range_parse_error;
+
+            // Add the new object details to the slow and increment counters/pointers.
+            p_new->base = (prev ? (prev->high + 1) : 0);
+            p_new->high = ((p->base > 1) ? (p->base - 1) : 0);
+            p_new->single = (p_new->base == p_new->high);
+
+            p_new++;
+            new_amount++;
+        }
+
+        // If the final node was not capped at 255, add the last bit.
+        p--;
+        if ( 255 != p->high ) {
+            if ( (p_new - p_inv) >= (FUZZ_MAX_PATTERN_RANGE_FRAGMENTS * sizeof(fuzz_repetition_t)) )
+                goto __range_parse_error;
+
+            p_new->base = (p->high + 1);
+            p_new->high = 255;
+            p_new->single = (255 == p_new->base);
+            new_amount++;
+        }
+
+        // Set the new amount, copy the new set, and clean up.
         amount = new_amount;
+        memcpy( &(p_range->fragments[0]), p_inv, (new_amount*sizeof(fuzz_repetition_t)) );
+        free( (void*)p_inv );
     }
 
 
