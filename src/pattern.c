@@ -50,6 +50,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 static const char* __seek_marker_end( const char* start, char const target ) {
     const char* end = start;
     while( *(++end) ) {
+        if ( '\\' == *end && (end+1) <= (start+strlen(start)) )  {
+            end++;
+            continue;   // always skip escaped chars
+        }
         if ( *end == target ) {
             if ( (end-start) > 1 )  return end;
             else break;
@@ -532,6 +536,15 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 size_t pres = (nest_level+1);
                 const char* p_seek = (p+1);
                 for ( ; pres > nest_level && p_seek < (p_pattern+len) && (*p_seek); p_seek++ ) {
+                    if ( '\\' == *p_seek ) {
+                        if ( (p_seek+1) > (p_pattern+len) ) {
+                            FUZZ_ERR_IN_CTX( "Subsequence '()' mechanism contains an invalid escape" );
+                        } else {
+                            p_seek++;   //ignore the escaped character
+                            continue;
+                        }
+                    }
+
                     pres += (  ((*p_seek == '(')*1) + ((*p_seek == ')')*-1)  );
                     if ( pres > FUZZ_MAX_NESTING_COMPLEXITY ) {
                          FUZZ_ERR_IN_CTX( "Subsequence '()' statements can only be nested up to 5 times."
@@ -772,15 +785,21 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
     }
 
     // Initial syntax check. Characters should only _ever_ consist of: [\^\d\-,] (^ can only be 1st)
-    int is_grammar = 0; //whether the previous character is grammatical or a number
+    int was_grammar = 0; //whether the previous character is grammatical or a number
     for ( const char* x = p_content; (*x); x++ ) {
+        int is_grammar = (',' == *x || '-' == *x);
+
+        if ( '\\' == *x ) {
+            was_grammar = 0;   //allows escaping grammatical chars , and -
+            continue;
+        }
         if (
                !(*x)
             || ( !isdigit((int)(*x)) && (',' != *x) && ('-' != *x) )
-            || ( is_grammar && !isdigit((int)(*x)) )
+            || ( was_grammar && is_grammar )
         )  { return 0; }
 
-        is_grammar = !isdigit( (int)(*x) );
+        was_grammar = (',' == *x || '-' == *x);//!isdigit( (int)(*x) );
     }
     // The only 'single' character allowed is a number, not ^ or , or -
     if (  1 == strnlen( p_content, 3 ) && !isdigit( (int)(*p_content) )  )  return 0;
