@@ -256,6 +256,7 @@ int main( int argc, char* const argv[] ) {
     fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents, &p_err_ctx );
     if ( NULL == p_pattern_factory ) {
         Error__print( p_err_ctx, stderr );
+        free( p_pattern_contents );
         exit( 1 );
     } else {
         // TEST CODE //
@@ -379,9 +380,6 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
         }
 
         // Now assign the read contents to the pattern_contents location.
-/*        char* p_final = (char*)calloc( read_count+1, sizeof(char) );
-        memcpy( p_final, p_read, read_count );
-        p_final[read_count] = '\0';*/
         p_pattern_data = strndup(  p_read, strnlen( p_read, FUZZ_MAX_PATTERN_LENGTH-1 )  );
 
         if ( p_read != NULL )  free( p_read );

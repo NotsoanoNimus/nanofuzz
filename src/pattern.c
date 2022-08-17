@@ -623,7 +623,7 @@ printf( "SUB: |%s|\n", p_sub );
                 // Rewind another character if there's more than 1 static str char; e.g. '123{8}45' vs. '1{4}'.
                 //   Effectively, the next iteration of the switch-case will parse this lone-dupe itself.
                 //   But if the static string that's incoming is only one character, this does it now.
-                if ( (p-start) > 0 && ('{' == *(p+1)) )  p--;
+                if ( (p-start) > 0 && p < (p_pattern+len) && ('{' == *(p+1)) )  p--;
 
                 // Catalog the static string.
                 p_new_block = NEW_PATTERN_BLOCK;
@@ -645,12 +645,19 @@ printf( "SUB: |%s|\n", p_sub );
 
         __err_exit:
             if ( p_new_block )  free( p_new_block );
-            List__delete( p_seq );
+            fuzz_factory_t* x = __compress_List_to_factory( p_seq );
+            PatternFactory__delete( x );
+//            List__delete( p_seq );
             return NULL;
     }
 
     // Return the linked list representing the sequence of generation.
-    return p_seq;
+    if ( List__get_count( p_seq ) > 0 ) {
+        return p_seq;
+    } else {
+        List__delete( p_seq );
+        return NULL;
+    }
 }
 
 
