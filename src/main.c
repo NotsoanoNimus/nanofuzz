@@ -250,10 +250,10 @@ int main( int argc, char* const argv[] ) {
         errx( 1, "A pattern to parse was not found. Please check the provided options and try again.\n" );
 
     // Create a new error context to read problems from the pattern string, if any.
-    fuzz_error_t* p_err_ctx = Error__new();
+    fuzz_error_t* p_err_ctx = NULL;
 
     // Parse it and generate a pattern factory in the background.
-    fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents, p_err_ctx );
+    fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents, &p_err_ctx );
     if ( NULL == p_pattern_factory ) {
         Error__print( p_err_ctx, stderr );
         exit( 1 );
@@ -283,12 +283,14 @@ int main( int argc, char* const argv[] ) {
             fuzz_str_t* p_str = Generator__get_next( p_genctx );
             printf(  "FUZZ: %s\n", (const char*)(p_str->output)  );
     //        debug__print_hex( "Str", p_str, strlen(p_str) );
+            free( (void*)p_str->output ); free( p_str );
         }
     } else {
         for ( ; ; ) {
             fuzz_str_t* const p_str = Generator__get_next( p_genctx );
             Generator__get_next( p_genctx );
             printf( "FUZZ: %s\n", (const char*)(p_str->output) );
+            free( (void*)p_str->output ); free( p_str );
         }
     }
 

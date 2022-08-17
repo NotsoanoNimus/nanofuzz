@@ -72,10 +72,14 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
     return (struct _fuzz_ctx_t* const)p_ctx;
 }
 
-// Destroy a context. For now, this simply frees the context and tracker.
-static void __Context__delete( struct _fuzz_ctx_t* const p ) {
+// Destroy a context. This frees the context, error handler (if no errors), & tracker.
+static inline void __Context__delete( struct _fuzz_ctx_t* const p ) {
     if ( p ) {
         if ( p->p_nest_tracker )  free( p->p_nest_tracker );
+
+        if (  p->p_err && 0 == Error__has_error( p->p_err )  )
+            Error__delete( p->p_err );
+
         free( (void*)p );
     }
 }
@@ -83,7 +87,7 @@ static void __Context__delete( struct _fuzz_ctx_t* const p ) {
 
 
 // Compress the contents of a pattern block list into a single calloc and set it in the factory.
-static inline fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
+static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     if ( NULL == p_list || List__get_count( p_list ) < 1 )  return NULL;
 
     // Fetch the list items count, calloc, set each cell, and create the factory.
@@ -158,7 +162,7 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
 
     // Free the pattern_block blob.
     if ( NULL != p_fact->node_seq )  free( p_fact->node_seq );
-
+    // And free the factory itself.
     free( p_fact );
 }
 
@@ -283,17 +287,14 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 
 // Build the fuzz factory. Since this is only intended to run as part of the
 //   wind-up cycle, optimization is not an essential concern here.
-fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_err ) {
-    if ( NULL == p_err )  p_err = Error__new();
+fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** pp_err ) {
 
     // Create a new pattern context.
     struct _fuzz_ctx_t* const p_ctx = __Context__new();
-    // Free and override the default err_ctx if one's provided. This will always run
-    //   but that's not really a big deal right now. ---TODO---
-    if ( p_err ) {
-        if ( p_ctx->p_err )  free( p_ctx->p_err );
-        p_ctx->p_err = p_err;
-    }
+
+    // If a pointer to capture the error handler is given, point it properly.
+    if ( pp_err && NULL == *pp_err )
+        *pp_err = p_ctx->p_err;
 
     // Parse the pattern and manufacture the factory (meta). MAGIC!
     List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
@@ -301,9 +302,6 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_
 
     // Discard the context since a pointer to the err ctx is available.
     __Context__delete( p_ctx );
-    // If the factory returned OK and there are no warnings/errors, just destroy the err ctx.
-    if ( p_ff && p_err && List__get_count( Error__get_fragments(p_err) ) < 1 )
-        Error__delete( p_err );
 
     return p_ff;
 }
@@ -555,13 +553,14 @@ printf( "READ: %02x\n", *p );
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                 p_new_block->type = sub;
 
-                size_t* p_ns = (size_t*)calloc( 1, sizeof(size_t) );
-                *p_ns = nest_level;
-                p_new_block->data = p_ns;
+                size_t* p_lvl = (size_t*)calloc( 1, sizeof(size_t) );
+                *p_lvl = nest_level;
+                p_new_block->data = p_lvl;
 
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
                 List__add_node( p_seq, p_new_block );
+                p_new_block = NULL;   //this should be done to prevent double-frees
 
 
                 //// RECURSION: Prepare a new substring and parse it anew.
@@ -578,10 +577,14 @@ printf( "SUB: |%s|\n", p_sub );
                 }
 
                 // At this point, essentially linearly staple the output of the sub in memory.
+                //   Since this list is only used for reversing, be sure to delete it later.
                 List_t* x = List__reverse( p_pre );
                 for ( ListNode_t* y = List__get_head( x ); y; y = y->next )
                     List__add_node( p_seq, y->node );
 
+                size_t rev_size = List__get_count( x );
+                List__clear( x );
+                free( x );
 
                 // Create the ret node and point it back to 'p_new_block'.
                 fuzz_pattern_block_t* p_ret = NEW_PATTERN_BLOCK;
@@ -589,7 +592,7 @@ printf( "SUB: |%s|\n", p_sub );
                 p_ret->type = ret;
 
                 size_t* p_sz = (size_t*)calloc( 1, sizeof(size_t) );
-                *p_sz = List__get_count( x );   //how many nodes to wade backward through
+                *p_sz = rev_size;   //how many nodes to wade backward through
                 p_ret->data = p_sz;
 
                 p_new_block = p_ret;
@@ -636,22 +639,18 @@ printf( "SUB: |%s|\n", p_sub );
         }
 
         // Add the (maybe-)populated node onto the list and continue;
-        if ( p_new_block )  List__add_node( p_seq, p_new_block );
+        if ( p_new_block )
+            List__add_node( p_seq, p_new_block );
         continue;
 
         __err_exit:
             if ( p_new_block )  free( p_new_block );
-            //if ( p_nest_tracker ) free( p_nest_tracker );
             List__delete( p_seq );
             return NULL;
     }
 
-    // Assign the list to the factory and return it.
-//printf( "List elements: %lu\n", List__get_count( p_seq ) );
-    //if ( p_nest_tracker )  free( p_nest_tracker );
-
+    // Return the linked list representing the sequence of generation.
     return p_seq;
-//    return __compress_List_to_factory( p_seq );
 }
 
 

@@ -78,7 +78,7 @@ void PatternFactory__delete( fuzz_factory_t* p_fact );
 void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 // Generate a pattern factory from an input pattern string.
 //   This method is wrapped in the API calls.
-fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t* p_err );
+fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p_err );
 
 
 

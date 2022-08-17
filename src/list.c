@@ -34,18 +34,29 @@ List_t* List__new( size_t max_size ) {
 
 // Delete and destroy a linked-list object from the heap.
 void List__delete( List_t* list ) {
+    // First, delete all node data containers.
+    ListNode_t* x = List__get_head( list );
+    while ( NULL != x ) {
+        if ( x->node )  free( x->node );
+        x = x->next;
+    }
+
+    // Then, delete the ListNode items.
     List__clear( list );
+
+    // Finally, free the entire list.
     if ( NULL != list )  free( list );
 }
 
-// Clear all items from a linked-list object.
+// Clear all items from a linked-list object. This simply clears all nodes from
+//   the list, but does NOT delete the node data containers (items actually ref'd
+//   by list nodes).
 void List__clear( List_t* list ) {
     if ( NULL == list )  return;
 
     ListNode_t* x = List__get_head( list );
     while ( NULL != x ) {
         ListNode_t* x_shadow = x->next;
-        if ( x->node )  free( x->node );
         free( x );
         x = x_shadow;
     }
@@ -65,7 +76,10 @@ List_t* List__reverse( List_t* list ) {
         x = x->next;
     }
 
-    List__delete( list );
+    // Clear the old list (but don't free ptrs) and delete.
+    List__clear( list );
+    free( list );
+
     return p_new;
 }
 

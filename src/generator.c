@@ -254,11 +254,6 @@ printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, c
                 break;
             }
 
-            case end : {   // paranoia (see loop condition)
-                goto __gen_end;
-                break;
-            }
-
             default : {
                 return NULL;   // TODO: should this be here?
                 break;
@@ -268,13 +263,19 @@ printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, c
     }
 
     // Allocate a COPY of the return data and return the struct ptr.
-    __gen_end: {}
-        fuzz_str_t* p_ret = (fuzz_str_t*)calloc( 1, sizeof(fuzz_str_t) );
-        p_ret->output = (const void*)calloc( (p_current - p_ctx->p_data_pool), sizeof(char) );
-        p_ret->length = (p_current - p_ctx->p_data_pool);
+    fuzz_str_t* p_ret = (fuzz_str_t*)calloc( 1, sizeof(fuzz_str_t) );
+    p_ret->length = (p_current - p_ctx->p_data_pool);
 
+    if ( p_ret->length ) {
+        p_ret->output = (const void*)calloc( (p_ret->length + 1), sizeof(char) );
         memcpy( (void*)p_ret->output, p_ctx->p_data_pool, (p_ret->length)*sizeof(char) );
-        return p_ret;
+        *((char*)(p_ret->output + p_ret->length)) = '\0';   //paranoia, necessary if 'output' will be printed
+    } else {
+        p_ret->output = NULL;
+    }
+
+    return p_ret;
+
 
     __gen_overflow:
         // When a buffer is going to overflow, STOP and RESET!

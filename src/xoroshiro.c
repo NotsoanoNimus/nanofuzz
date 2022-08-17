@@ -65,6 +65,8 @@ xoroshiro256p_state_t* xoroshiro__new( uint64_t seed_value ) {
     for ( i = 0; i < 4; i++ )
         (state->s[i]).ras = tinymt64_generate_uint64( p_prng_init );
 
+    free( p_prng_init );
+
     __xoroshiro256p__next( state );
     return state;
 }
