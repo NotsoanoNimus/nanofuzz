@@ -352,6 +352,7 @@ printf( "READ: %02x\n", *p );
 
                 // Get special types and convert them as needed.
                 switch ( esclow ) {
+                    case 'a' : {  final = (char)0x07; break;  }
                     case 'b' : {  final = (char)0x08; break;  }
                     case 't' : {  final = (char)0x09; break;  }
                     case 'n' : {  final = (char)0x0A; break;  }
