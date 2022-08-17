@@ -37,12 +37,12 @@ typedef struct _fuzz_generator_state_vector_t {
 //   allocated context to re/use for 'get_next' operations. Sharing this context
 //   does NOT affect the randomness of the sequences.
 struct _fuzz_generator_context_t {
-    state_t state;
-    gen_pool_type type;
-    fuzz_factory_t* p_factory;
-    xoroshiro256p_state_t* p_prng;
-    unsigned char* p_data_pool;
-    unsigned char* p_pool_end;
+    state_t state;                   // see above; context state
+    gen_pool_type type;              // controls the size of the alloc'd data pool
+    fuzz_factory_t* p_factory;       // core of the context: constructed factory
+    xoroshiro256p_state_t* p_prng;   // PRNG structure (TODO: move to state vec?)
+    unsigned char* p_data_pool;      // stores generated data
+    unsigned char* p_pool_end;       // marks the end of the data pool in memory
 };
 
 
@@ -132,7 +132,7 @@ printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
             );
 
         // Helpful debugging information.
-printf( "[N: %lu] [X: %u] [T: %u] [C: %lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
+printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
 
         // The block type must determine the next behavior used in pattern generation.
         switch ( pip->type ) {
@@ -161,6 +161,35 @@ printf( "[N: %lu] [X: %u] [T: %u] [C: %lu]\n", (p_ctx->state).nest_level, (NULL 
             }
 
             case range : {
+                // Overflow check boi
+                if ( ((sizeof(char)*iters)+p_current) >= p_ctx->p_pool_end )  goto __gen_overflow;
+
+                // Get the range object.
+                fuzz_range_t* p_range = ((fuzz_range_t*)(pip->data));
+
+                // If the range has useable fragments, use the PRNG to get a character from one of them.
+                if ( p_range && p_range->amount > 0 ) {
+                    fuzz_repetition_t* p_frag = &(p_range->fragments[0]);
+                    fuzz_repetition_t* p_select;
+
+                    // Loop over the range to get a random byte <iters> times.
+                    for ( ; processed < iters; processed++ ) {
+                        uint8_t frag_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, 0, ((p_range->amount)-1) );
+
+                        p_select = (p_frag + frag_select);
+
+                        uint8_t char_select;
+                        if ( p_frag->single )
+                            char_select = p_select->base;
+                        else
+                            char_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, p_select->base, p_select->high );
+printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, char_select );
+
+                        // Copy the selected character onto the output pool and increment.
+                        *(p_current) = (unsigned char)char_select;
+                        p_current++;
+                    }
+                }
 
                 // Move to the next block.
                 pip++;
