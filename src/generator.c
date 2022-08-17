@@ -300,3 +300,23 @@ void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to ) {
     free( (void*)(p_tmp->output) );
     free( (void*)p_tmp );
 }
+
+
+
+// Resize a generator's data pool to the new ctx type.
+//   WARNING: This zeroes out the current data pool (and thus the most recently-
+//   generated fuzz_str_t stream).
+void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
+    if ( !p_ctx )  return;
+
+    if ( p_ctx->p_data_pool )  free( p_ctx->p_data_pool );
+
+    p_ctx->type = type;
+    p_ctx->p_data_pool = (unsigned char*)calloc( 1,
+        (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+    p_ctx->p_pool_end = (
+        1
+        + (p_ctx->p_data_pool)
+        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
+    );
+}

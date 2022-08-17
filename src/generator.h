@@ -15,7 +15,11 @@
 #include <stdio.h>
 
 // WARNING: Change these at your own risk!
+// --- 1 MiB default multiplier for the generator context/pool type.
 #define FUZZ_GEN_CTX_POOL_MULTIPLIER (1 * 1024 * 1024)
+// --- The default type associated with variable-based genctx declarations.
+// ---   This is for all <> variable mechanisms.
+#define FUZZ_GEN_DEFAULT_REF_CTX_TYPE tiny
 
 
 
@@ -56,6 +60,11 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx );
 // Instead of returning heap data, manages the memory for the caller and
 //   writes the generated content directly to the given I/O stream.
 void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to );
+
+// Resize a generator's data pool to the new ctx type.
+//   WARNING: This zeroes out the current data pool (and thus the most recently-
+//   generated fuzz_str_t stream).
+void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type );
 
 
 
