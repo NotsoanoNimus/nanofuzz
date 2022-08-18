@@ -440,12 +440,12 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
 
             // Call the same minimalistic hash function used in the Generator file.
             //   Using the 'djb2' hashing algorithm.
-char* p_preserve = p_label;
+//char* p_preserve = p_label;
             unsigned long hash = 5381;
             int c;
             while ( (c = *p_label++) )
                 hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-printf( "(%p) PATTERN HASH (%lu) for LABEL '%s' with gtx at '%p'\n", p_idx, hash, p_preserve, p_ref->p_gen_ctx );
+//printf( "(%p) PATTERN HASH (%lu) for LABEL '%s' with gtx at '%p'\n", p_idx, hash, p_preserve, p_ref->p_gen_ctx );
 
             p_idx->_hash = hash;
             p_idx->_ctx  = p_ref->p_gen_ctx;
@@ -662,7 +662,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                         // Create the new factory.
                         fuzz_error_t* p_err = NULL;
-printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
+//printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
                         fuzz_factory_t* p_ff = PatternFactory__new( p_lvl0_sub, &p_err );
 
                         if ( NULL != p_err && Error__has_error( p_err ) ) {
@@ -672,7 +672,7 @@ printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
 
                         // Create the generator context.
                         fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff, FUZZ_GEN_DEFAULT_REF_CTX_TYPE );
-printf( "GENCTX: |%p|%s|\n", p_gctx, p_varname );
+//printf( "GENCTX: |%p|%s|\n", p_gctx, p_varname );
 
                         // Nullify this nest's (nest 0) tracker.
                         *((p_ctx->p_nest_tracker)+nest_level) = NULL;
@@ -1198,7 +1198,7 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         free( (void*)p_content );
         *pp_content = p_content = p_new;
     }
-printf( "CURRENT: |%s|\n", p_content );
+//printf( "CURRENT: |%s|\n", p_content );
 
 
     // --- By this point the content should be grammatically verified.
@@ -1226,7 +1226,7 @@ printf( "CURRENT: |%s|\n", p_content );
         if ( amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS )
             goto __range_parse_error;
 
-printf("SEP: |%s|\n", sep_token );
+//printf("SEP: |%s|\n", sep_token );
 
         range_token = strtok_r( sep_token, "-", &p_range_save );
         if ( strlen(range_token) < 1 )  goto __range_parse_error;
@@ -1238,7 +1238,7 @@ printf("SEP: |%s|\n", sep_token );
         } else if ( !__range_parse_token( range_token, &low ) ) {
             goto __range_parse_error;
         }
-printf("-- LOW: |%d|\n", low );
+//printf("-- LOW: |%d|\n", low );
         frag.base = low;
 
         // Parse the high value (if present), ensuring it's in-bounds and greater than low.
@@ -1254,7 +1254,7 @@ printf("-- LOW: |%d|\n", low );
             } else {
                 goto __range_parse_error;
             }
-printf("-- HIGH: |%d|\n", high );
+//printf("-- HIGH: |%d|\n", high );
 
             // Cannot have more than two tokens found inside a single separated range.
             if (  NULL != (range_token = strtok_r( NULL, "-", &p_range_save ))  ) {
@@ -1263,7 +1263,7 @@ printf("-- HIGH: |%d|\n", high );
 
         } else {
             // Mark the block 'single' and set 'high' to 'low' too for the below comparison.
-printf("-- SINGLE.\n" );
+//printf("-- SINGLE.\n" );
             frag.single = 1;
             frag.high = frag.base;
         }
@@ -1273,7 +1273,7 @@ printf("-- SINGLE.\n" );
         for ( size_t i = 0; i < (amount-1); i++ ) {
             fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
             if ( !p_shard )  continue;
-printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, frag.base, frag.high );
+//printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, frag.base, frag.high );
 
             if (
                    ( p_shard->single && frag.single && p_shard->base == frag.base )
@@ -1371,12 +1371,12 @@ printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high
     // Set the amount. This should be it for the range.
     if ( amount <= 0 )  goto __range_parse_error;
     p_range->amount = amount;
-printf( "+++ GOT '%lu' RANGES.\n", amount );
-for ( size_t i = 0; i < amount; i++ ) {
+//printf( "+++ GOT '%lu' RANGES.\n", amount );
+/*for ( size_t i = 0; i < amount; i++ ) {
     fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
     if ( !p_shard )  continue;
     printf( "-- SHARD: (%d) |%d|-|%d|\n", p_shard->single, p_shard->base, p_shard->high );
-}
+}*/
 
     // Assign the range to the pattern block's data and return "OK".
     p_pattern_block->data = (void*)p_range;

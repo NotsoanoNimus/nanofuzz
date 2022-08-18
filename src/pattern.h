@@ -10,9 +10,20 @@
 
 #include "fuzz_error.h"
 #include "list.h"
-#include "api.h"
 
 #define NEW_PATTERN_BLOCK (fuzz_pattern_block_t*)calloc( 1, sizeof(fuzz_pattern_block_t) );
+
+// 16MB max pattern length. TODO: Reconsider as the project matures.
+#define FUZZ_MAX_PATTERN_LENGTH (1 << 24)
+// Maximum length (including the null terminator) for a label's name in a pattern schema.
+#define FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH 9
+// Pattern nesting cannot exceed 5 layers of complexity.
+//   WARNING: Change this at your own peril.
+#define FUZZ_MAX_NESTING_COMPLEXITY 5
+// Maximum amount of separate items in a single 'range' mechanism (i.e. [1-2,3-4,5-6,...]).
+#define FUZZ_MAX_PATTERN_RANGE_FRAGMENTS 16
+// Max amount of ref shards allowed per fuzz_factory_t context.
+#define FUZZ_MAX_VARIABLES 16
 
 
 

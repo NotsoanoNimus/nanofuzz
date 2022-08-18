@@ -51,12 +51,12 @@ struct _fuzz_generator_context_t {
 // Inline method to look up a string as a hashtable value.
 static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t* p_ff, char* p_label ) {
     // Using the 'djb2' hashing algorithm.
-char* p_preserve = p_label;
+//char* p_preserve = p_label;
     unsigned long hash = 5381;
     int c;
     while ( (c = *p_label++) )
         hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-printf( "HASH (%lu) for LABEL '%s'\n", hash, p_preserve );
+//printf( "HASH (%lu) for LABEL '%s'\n", hash, p_preserve );
 
     // Search the index opaquely for the hash. If found, return the pointer. Else, NULL.
     void* p_scroll;
@@ -67,7 +67,7 @@ printf( "HASH (%lu) for LABEL '%s'\n", hash, p_preserve );
         i < FUZZ_MAX_VARIABLES;
         i++
     ) {
-printf("SCROLLGENGEN: (%p) (%lu) (%lu:%p)\n", p_scroll, struct_size, *((unsigned long*)(p_scroll + (i*struct_size))), *((fuzz_gen_ctx_t**)(p_scroll + (i*struct_size) + sizeof(unsigned long))) );
+//printf("SCROLLGENGEN: (%p) (%lu) (%lu:%p)\n", p_scroll, struct_size, *((unsigned long*)(p_scroll + (i*struct_size))), *((fuzz_gen_ctx_t**)(p_scroll + (i*struct_size) + sizeof(unsigned long))) );
         if (
             0 == memcmp(
                 (p_scroll + (i*struct_size)),
@@ -194,10 +194,10 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
             case reference : {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(pip->data);
-printf( "GENREF '%s'\n", p_ref->label );
+//printf( "GENREF '%s'\n", p_ref->label );
                 fuzz_gen_ctx_t* p_gctx =
                     __Generator__subcontext_for_label( p_ctx->p_factory, &(p_ref->label[0]) );
-printf( "GENCTX: |%p|%p|%p|%d|\n", p_gctx, p_gctx->p_factory, p_gctx->p_prng, p_gctx->type );
+//printf( "GENCTX: |%p|%p|%p|%d|\n", p_gctx, p_gctx->p_factory, p_gctx->p_prng, p_gctx->type );
 
                 // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
                 if ( NULL == p_gctx )  goto __gen_overflow;
