@@ -76,6 +76,8 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 
 
 // Deletes any allocated gen ctx resources, but not 'deeply'.
+//   The factory is deleted separate from the genctx
+//   ^ TODO: Reconsider this since the generator and factory are technically not separate entities.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
     if ( p_ctx ) {
         if ( p_ctx->p_prng )  free( (void*)(p_ctx->p_prng) );

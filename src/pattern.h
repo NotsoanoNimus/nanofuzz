@@ -27,9 +27,20 @@ typedef enum _pattern_block_type {
     end
 } pattern_block_type;
 
+// Different types of variable/reference related actions.
+typedef enum _reference_type {
+    ref_declaration = 1,    // declare a named variable & shuffle
+    ref_reference,          // reference/paste a variable
+    ref_count,              // output a number repr. a var's length
+    ref_shuffle             // shuffle (get_next) a variable output
+} reference_type;
+
 
 // A finalized, contiguous stream of blocks which is used to construct fuzzer output.
 typedef struct _fuzz_factory_t fuzz_factory_t;
+
+// A sub-structure which holds reference/variable information.
+typedef struct _fuzz_reference_t fuzz_reference_t;
 
 // A ranging structure used in the pattern blocks to determine the amount of times, if set,
 //   to repeat a block of pattern data. This is populated by the 'repetition' mechanism.
@@ -60,8 +71,6 @@ typedef struct _fuzz_pattern_block_t {
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
     fuzz_repetition_t count;
-    // This label is the name of the variable assigned to the block, if any.
-    const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
 } __attribute__((__packed__)) fuzz_pattern_block_t;
 
 

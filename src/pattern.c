@@ -6,6 +6,7 @@
  */
 
 #include "pattern.h"
+#include "generator.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -34,6 +35,20 @@ struct _fuzz_ctx_t {
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
     // Context-dependent list of varname-to-pattern-block associations.
+};
+
+// A sub-structure which holds reference/variable information.
+struct _fuzz_reference_t {
+    // The sub-type for the reference.
+    reference_type type;
+    // This label is the name of the variable assigned to the block when type is
+    //   a declaration, the reference name otherwise.
+    const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
+    // The generator context to use when shuffling the variable or initializing it.
+    //   Since this stands on its own apart from the primary factory and generator,
+    //   a special process is required to 'free' this when the outer factory is
+    //   being deleted and this instance's type is a 'declaration'.
+    fuzz_gen_ctx_t* p_gen_ctx;
 };
 
 
@@ -185,12 +200,25 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
     fuzz_pattern_block_t* p_base_block = (fuzz_pattern_block_t*)(p_fact->node_seq);
     for ( size_t i = 0; i < p_fact->count; i++ ) {
         fuzz_pattern_block_t* x = (p_base_block + i);
-        if ( NULL != x && x->data )
+
+        if ( NULL != x && x->data ) {
+            // However, there is one exception for ref.ref_declaration blocks specifically,
+            //   since the sub-generator-context needs to be nuked.
+            if ( reference == x->type ) {
+
+                fuzz_reference_t* p_ref = (fuzz_reference_t*)(x->data);
+                if ( ref_declaration == p_ref->type && p_ref->p_gen_ctx )
+                    Generator__delete_context( p_ref->p_gen_ctx );
+
+            }
+
             free( x->data );
+        }
     }
 
     // Free the pattern_block blob.
     if ( NULL != p_fact->node_seq )  free( p_fact->node_seq );
+
     // And free the factory itself.
     free( p_fact );
 }
@@ -231,14 +259,16 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         switch ( p->type ) {
 
             case reference: {
-                // The first char in the 'reference' label string should always be one of the three types:
-                //   '@' - paste pre-generated content; '#' - get the LENGTH of the pre-gen content; '%' - regenerate/shuffle
-                //   Additionally, to avoid confusion, '$' is a NAMED DECLARATION for a subseq and is not a block on its own.
+                // The message will change based on the type of reference.
+                //   NOTE: ref_declaration types will never show up here, since they don't
+                //         create pattern blocks to use and this is an explanation thereof.
                 const char* p_reftype;
-                switch ( *((const char*)(p->data)) ) {
-                    case '@': {  p_reftype = "Paste pre-generated"; break;  }
-                    case '#': {  p_reftype = "Output the length of the"; break;  }
-                    case '%': {  p_reftype = "Shuffle or regenerate"; break;  }
+                fuzz_reference_t* p_ref = (fuzz_reference_t*)(p->data);
+
+                switch ( p_ref->type ) {
+                    case ref_reference: {  p_reftype = "Paste pre-generated"; break;  }
+                    case ref_count    : {  p_reftype = "Output the length of the"; break;  }
+                    case ref_shuffle  : {  p_reftype = "Regenerate"; break;  }
                     default : {
                         fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" );
                         goto __explain_ref_unknown;
@@ -246,7 +276,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 }
 
                 fprintf( fp_stream, "%s stored subsequence with name '%s' (%s times)\n",
-                    p_reftype, (const char*)((p->data)+1), p_range_str );
+                    p_reftype, p_ref->label, p_range_str );
 
                 __explain_ref_unknown:
                     break;
@@ -880,13 +910,12 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
             if ( '\\' == *p_x && ',' == *(p_x+1) ) {
 
                 if ( (p_x - p_save_x) > 0 ) {
-
                     snprintf( p_new_save, (p_x - p_save_x + 1), "%s", p_save_x );
                     p_new_save += (p_x - p_save_x);
-
-                    snprintf( p_new_save, (4 + 1), "\\x2C" );
-                    p_new_save += 4;
                 }
+
+                snprintf( p_new_save, (4 + 1), "\\x2C" );
+                p_new_save += 4;
 
                 p_x += 2;
                 p_save_x = p_x;

@@ -259,6 +259,8 @@ int main( int argc, char* const argv[] ) {
         free( p_pattern_contents );
         exit( 1 );
     } else {
+        // Explain the factory.
+        PatternFactory__explain( stdout, p_pattern_factory );
         // TEST CODE //
 /*
         printf( "Data size: %lu (%lu)\n",
