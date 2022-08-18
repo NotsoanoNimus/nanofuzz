@@ -179,11 +179,12 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         p_select = (p_frag + frag_select);
 
                         uint8_t char_select;
-                        if ( p_frag->single )
+                        if ( 0 != p_select->single ) {
                             char_select = p_select->base;
-                        else
+                        } else {
                             char_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, p_select->base, p_select->high );
-//printf( "RANGE: fragment %d/%lu; char %d\n", (frag_select+1), p_range->amount, char_select );
+                        }
+//printf( "RANGE: fragment %d/%lu; char %d (%d/%d-%d)\n", (frag_select+1), p_range->amount, char_select, p_select->single, p_select->base, p_select->high );
 
                         // Copy the selected character onto the output pool and increment.
                         *(p_current) = (unsigned char)char_select;

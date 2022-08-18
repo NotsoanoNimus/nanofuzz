@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 
 
 
@@ -39,7 +40,7 @@ struct _fuzz_ctx_t {
 
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
-static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* p_content );
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern );
 
 
@@ -60,6 +61,30 @@ static const char* __seek_marker_end( const char* start, char const target ) {
         }
     }
     return NULL;
+}
+
+
+
+// Get the mapped value of something which has been escaped in an input string.
+static char __escape_to_value( char esc ) {
+    char final;
+
+    if ( (int)esc >= 0x41 && (int)esc <= 0x5A )  esc += 0x20;   // upper to lower case
+
+    // Get special types and convert them as needed.
+    switch ( esc ) {
+        case 'a' : {  final = (char)0x07; break;  }
+        case 'b' : {  final = (char)0x08; break;  }
+        case 't' : {  final = (char)0x09; break;  }
+        case 'n' : {  final = (char)0x0A; break;  }
+        case 'v' : {  final = (char)0x0B; break;  }
+        case 'f' : {  final = (char)0x0C; break;  }
+        case 'r' : {  final = (char)0x0D; break;  }
+        case 's' : {  final = ' '; break;  }
+        default  : {  final = esc; break;  }
+    }
+
+    return final;
 }
 
 
@@ -355,25 +380,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
             case '\\': {
                 // This should be pretty simple: get the char being escaped and enter it as a static str block.
                 char esc = *(p+1);
-                char esclow = esc;
                 char final;
 
                 if ( !esc ) {  FUZZ_ERR_IN_CTX( "The escaped character could not be understood" );  }
-
-                if ( (int)esc >= 0x41 && (int)esc <= 0x5A )  esclow += 0x20;   // upper to lower case
-
-                // Get special types and convert them as needed.
-                switch ( esclow ) {
-                    case 'a' : {  final = (char)0x07; break;  }
-                    case 'b' : {  final = (char)0x08; break;  }
-                    case 't' : {  final = (char)0x09; break;  }
-                    case 'n' : {  final = (char)0x0A; break;  }
-                    case 'v' : {  final = (char)0x0B; break;  }
-                    case 'f' : {  final = (char)0x0C; break;  }
-                    case 'r' : {  final = (char)0x0D; break;  }
-                    case 's' : {  final = ' '; break;  }
-                    default  : {  final = esc; break;  }
-                }
+                final = __escape_to_value( esc );
 
                 p_new_block = NEW_PATTERN_BLOCK;
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
@@ -469,7 +479,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 (p_new_block->count).base = 1;
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
 
-                int res = __range_parse_range( p_new_block, t );
+                int res = __range_parse_range( p_new_block, &t );
                 free( (void*)t );
 
                 if ( 0 == res ) {
@@ -764,6 +774,46 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, co
 
 
 
+// Helper method.
+static int __range_parse_token( const char* p_token, uint8_t* char_code ) {
+
+    // Edge cases for "\-".
+    if ( '\\' == *p_token && 1 == strlen(p_token) ) {
+        *char_code = (uint8_t)'-';
+
+    // Escaped commas. TODO: necessary??
+    } else if ( 0 == strcmp( p_token, "\\," ) ) {
+        *char_code = ',';
+
+    // Some type of escape character or code, by itself or of one of the three bases.
+    } else if ( '\\' == *p_token ) {
+        // TODO: Cleanup
+        if ( 'x' == (*(p_token+1) | 32) ) {
+            errno = 0;
+            *char_code = (uint8_t)(strtol((p_token+2),NULL,16) & (long int)0xFF);
+            if ( errno )  return 0;
+        } else if ( 'd' == (*(p_token+1) | 32) ) {
+            errno = 0;
+            *char_code = (uint8_t)(strtol((p_token+2),NULL,10) & (long int)0xFF);
+            if ( errno )  return 0;
+        } else if ( 'o' == (*(p_token+1) | 32) ) {
+            errno = 0;
+            *char_code = (uint8_t)(strtol((p_token+2),NULL,8) & (long int)0xFF);
+            if ( errno )  return 0;
+        } else {
+            *char_code = __escape_to_value( *(p_token+1) );
+        }
+
+    // Single character.
+    } else if ( 1 == strlen(p_token) ) {
+        *char_code = (uint8_t)(*p_token);
+
+    } else  return 0;
+
+    // OK.
+    return 1;
+}
+
 // Parse content in a range between two square brackets. Valid formats look something like:
 //   [0,12-17,128-255]
 //   [35]
@@ -773,8 +823,10 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, co
 // TODO: Consider expanding the lexer to allow simple ascii character ranges, e.g. 'a-z'. Maybe...
 // Another TODO: Add the context here, so errors can be appeneded and made more specific.
 // Params are: $1 - Pattern Block to fill; $2 - String to parse (between brackets)
-static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char* p_content ) {
-    if ( !p_pattern_block || !p_content || strnlen(p_content,3) < 1 )  return 0;
+static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content ) {
+    if ( !p_pattern_block || !pp_content || !(*pp_content) || strnlen(*pp_content,3) < 1 )  return 0;
+
+    const char* p_content = *pp_content;
 
 
     // Set the flag if true and advance.
@@ -784,38 +836,81 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         if ( strnlen(p_content,3) < 1 )  return 0;   //another check
     }
 
-    // Initial syntax check. Characters should only _ever_ consist of: [\^\d\-,] (^ can only be 1st)
-    int was_grammar = 0; //whether the previous character is grammatical or a number
+    // Initial syntax check.
+    int was_grammar = 1; // whether the previous character is grammatical or a number
+    // ^ set to 1 by default to prevent ranges from starting with a grammatical character
+    int is_grammar = 0; // current character
     for ( const char* x = p_content; (*x); x++ ) {
-        int is_grammar = (',' == *x || '-' == *x);
+        is_grammar = (',' == *x || '-' == *x);
 
         if ( '\\' == *x ) {
+            if ( !(*(x+1)) )  return 0;   //paranoia; shouldn't really be possible but w/e
+            x++;
             was_grammar = 0;   //allows escaping grammatical chars , and -
             continue;
         }
-        if (
-               !(*x)
-            || ( !isdigit((int)(*x)) && (',' != *x) && ('-' != *x) )
-            || ( was_grammar && is_grammar )
-        )  { return 0; }
 
-        was_grammar = (',' == *x || '-' == *x);//!isdigit( (int)(*x) );
+        if ( !(*x) || ( was_grammar && is_grammar ) )  return 0;
+
+        was_grammar = is_grammar;
     }
-    // The only 'single' character allowed is a number, not ^ or , or -
-    if (  1 == strnlen( p_content, 3 ) && !isdigit( (int)(*p_content) )  )  return 0;
+
     // Commas or dashes cannot be the first or the last characters under any circumstances
-    if (
-           (',' == *p_content) || (',' == *(p_content+strlen(p_content)-1))
-        || ('-' == *p_content) || ('-' == *(p_content+strlen(p_content)-1))
-    )  return 0;
+    if ( is_grammar )  return 0;
+
+    // IMPORTANT: Convert any escaped commas to their hex equivalents.
+    const char* t = p_content;
+    size_t occurs = 0;
+    while ( (t+1) < (p_content+strlen(p_content)) ) {
+        if ( ('\\' == *t) && (',' == *(t+1)) )
+            occurs++;
+        t++;
+    }
+
+    // However many times the string occurs, '\,' must convert to '\x2C' (2 => 4).
+    //   Formula would then be newstrlen = strlen + (2*occurs)
+    if ( occurs ) {
+        char* p_new = (char*)calloc( (strlen(p_content)+(2*occurs)+1), sizeof(char) );
+        char* p_new_save = p_new;
+
+        const char* p_x = p_content;
+        const char* p_save_x = p_content;
+
+        while ( p_x < (p_content+strlen(p_content)) && (*p_x) ) {
+            if ( '\\' == *p_x && ',' == *(p_x+1) ) {
+
+                if ( (p_x - p_save_x) > 0 ) {
+
+                    snprintf( p_new_save, (p_x - p_save_x + 1), "%s", p_save_x );
+                    p_new_save += (p_x - p_save_x);
+
+                    snprintf( p_new_save, (4 + 1), "\\x2C" );
+                    p_new_save += 4;
+                }
+
+                p_x += 2;
+                p_save_x = p_x;
+
+            } else {
+                p_x++;
+            }
+        }
+
+        // Append any remaining content as applicable.
+        if ( (p_x - p_save_x) > 0 )
+            sprintf( p_new_save, "%s", p_save_x );
+
+        p_new[(strlen(p_content)+(2*occurs))] = '\0';   // paranoia
+        free( (void*)p_content );
+        *pp_content = p_content = p_new;
+    }
+printf( "CURRENT: |%s|\n", p_content );
 
 
-    // --- By this point the content is verified to contain only #s, ',', and '-'.
+    // --- By this point the content should be grammatically verified.
     // Create the range and populate it.
     fuzz_range_t* p_range = (fuzz_range_t*)calloc( 1, sizeof(fuzz_range_t) );
     fuzz_repetition_t frag = {0,0,0};
-    fuzz_repetition_t* p_frag = &frag;   //TODO clean up later
-//(fuzz_repetition_t*)calloc( 1, sizeof(fuzz_repetition_t) );
 
     char *p_sep_save, *p_range_save, *sep_token, *range_token;
     size_t amount = 0;
@@ -828,6 +923,8 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
 
         if ( strlen(sep_token) < 1 )  continue;
 
+        memset( &frag, 0, sizeof(fuzz_repetition_t) );
+
         range_token = NULL;
         p_range_save = NULL;
 
@@ -835,35 +932,46 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         if ( amount > FUZZ_MAX_PATTERN_RANGE_FRAGMENTS )
             goto __range_parse_error;
 
-//printf("SEP: |%s|\n", sep_token );
+printf("SEP: |%s|\n", sep_token );
 
         range_token = strtok_r( sep_token, "-", &p_range_save );
         if ( strlen(range_token) < 1 )  goto __range_parse_error;
 
-        // Parse the low value, allowing an explicitly-given '0' value.
-        uint16_t low = __get_valid_uint16( range_token );
-        if ( (*range_token == '0') && !low )   //first char must be 0 AND atoi didn't get num
-            p_frag->base = 0;
-        else if ( low > 0 && low < 256 )
-            p_frag->base = low;
-        else
+        // Get the first character.
+        uint8_t low = 0;
+        if ( 0 == strcmp(sep_token, "\\--") ) {
+            low = (uint8_t)'-';
+        } else if ( !__range_parse_token( range_token, &low ) ) {
             goto __range_parse_error;
-//printf("-- LOW: |%d|\n", low );
+        }
+printf("-- LOW: |%d|\n", low );
+        frag.base = low;
 
+        // Parse the high value (if present), ensuring it's in-bounds and greater than low.
         if (  NULL != (range_token = strtok_r( NULL, "-", &p_range_save ))  ) {
-            // Parse the high value (if present), ensuring it's in-bounds and greater than low.
-            uint16_t high = __get_valid_uint16( range_token );
-            if ( high > low && high < 256 )
-                p_frag->high = high;
-            else
+            uint8_t high = 0;
+            if ( !__range_parse_token( range_token, &high ) ) {
                 goto __range_parse_error;
-//printf("-- HIGH: |%d|\n", high );
+            }
+
+            if ( high > low && high < 256 ) {
+                frag.single = 0;
+                frag.high = high;
+            } else {
+                goto __range_parse_error;
+            }
+printf("-- HIGH: |%d|\n", high );
+
+            // Cannot have more than two tokens found inside a single separated range.
+            if (  NULL != (range_token = strtok_r( NULL, "-", &p_range_save ))  ) {
+                goto __range_parse_error;
+            }
 
         } else {
             // Mark the block 'single' and set 'high' to 'low' too for the below comparison.
-//printf("-- SINGLE.\n" );
-            p_frag->single = 1;
-            p_frag->high = low;
+printf("-- SINGLE.\n" );
+            frag.single = 1;
+            frag.high = frag.base;
         }
 
         // Finally, ranges should not step on each other or overlap otherwise. [1-2,3-4,5-6] is
@@ -871,18 +979,18 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         for ( size_t i = 0; i < (amount-1); i++ ) {
             fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
             if ( !p_shard )  continue;
-//printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, p_frag->base, p_frag->high );
+printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, frag.base, frag.high );
 
             if (
-                   ( p_shard->single && p_frag->single && p_shard->base == p_frag->base )
-                || ( p_shard->base <= p_frag->high && p_frag->base <= p_shard->high )
+                   ( p_shard->single && frag.single && p_shard->base == frag.base )
+                || ( p_shard->base <= frag.high && frag.base <= p_shard->high )
             ) {  goto __range_parse_error;  }
         }
 
         // Store the fragment and move to the next range fragment.
         memcpy(
             (  ((fuzz_repetition_t*)&(p_range->fragments)) + amount - 1  ),
-            p_frag,
+            &frag,
             sizeof(fuzz_repetition_t)
         );
 
@@ -969,7 +1077,12 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
     // Set the amount. This should be it for the range.
     if ( amount <= 0 )  goto __range_parse_error;
     p_range->amount = amount;
-//printf( "+++ GOT '%lu' RANGES.\n", amount );
+printf( "+++ GOT '%lu' RANGES.\n", amount );
+for ( size_t i = 0; i < amount; i++ ) {
+    fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
+    if ( !p_shard )  continue;
+    printf( "-- SHARD: (%d) |%d|-|%d|\n", p_shard->single, p_shard->base, p_shard->high );
+}
 
     // Assign the range to the pattern block's data and return "OK".
     p_pattern_block->data = (void*)p_range;
