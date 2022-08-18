@@ -321,9 +321,10 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 
                 switch ( p_ref->type ) {
 //                    case ref_declaration : {  p_reftype = "Review pre-declared"; break;  }
-                    case ref_reference   : {  p_reftype = "Paste pre-generated"; break;  }
-                    case ref_count       : {  p_reftype = "Output the length of the"; break;  }
-                    case ref_shuffle     : {  p_reftype = "Regenerate"; break;  }
+                    case ref_reference      : {  p_reftype = "Paste pre-generated"; break;  }
+                    case ref_count          : {  p_reftype = "Output the length of the"; break;  }
+                    case ref_count_nullterm : {  p_reftype = "Output the length (+1) of the"; break;  }
+                    case ref_shuffle        : {  p_reftype = "Regenerate"; break;  }
                     default : {
                         fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" );
                         goto __explain_ref_unknown;
@@ -564,7 +565,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 const char* start = p+1;   // set start to the first character.
 
                 // Make sure the variable name referenced is 1-8 chars. This doesn't count
-                //   the operator [$@#%] as a char (hence the +1).
+                //   the operator [$@#*%] as a char (hence the +1).
                 // TODO: Fix the static '8' in the error string
                 if ( (end-1 - start) > (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1) ) {
                     FUZZ_ERR_IN_CTX( "Variable '<>' names cannot be longer than 8 characters" );
@@ -594,7 +595,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // The length of the inner content must be upper-case and consist of:
                 //   + Operation specifier (1 char)
                 //   + Upper-case Label (1-8 chars)
-                // Format: <[$@#%]NAMENAME>
+                // Format: <[$@#*%]NAMENAME>
                 switch ( *start ) {
 
                     case '$' : {
@@ -694,6 +695,7 @@ printf( "GENCTX: |%p|%s|\n", p_gctx, p_varname );
 
                     case '@' :
                     case '#' :
+                    case '*' :
                     case '%' : {
                         // Check whether the variable name exists in the ll_shards linked list.
                         fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_node(
@@ -708,6 +710,8 @@ printf( "GENCTX: |%p|%s|\n", p_gctx, p_varname );
                              p_ref->type = ref_reference;
                         else if ( '#' == *start )
                              p_ref->type = ref_count;
+                        else if ( '*' == *start )
+                             p_ref->type = ref_count_nullterm;
                         else
                              p_ref->type = ref_shuffle;
 

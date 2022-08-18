@@ -32,6 +32,7 @@ typedef enum _reference_type {
     ref_declaration = 1,    // declare a named variable & shuffle
     ref_reference,          // reference/paste a variable
     ref_count,              // output a number repr. a var's length
+    ref_count_nullterm,     // same as above, +1
     ref_shuffle             // shuffle (get_next) a variable output
 } reference_type;
 

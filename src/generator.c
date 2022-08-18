@@ -202,36 +202,67 @@ printf( "GENCTX: |%p|%p|%p|%d|\n", p_gctx, p_gctx->p_factory, p_gctx->p_prng, p_
                 // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
                 if ( NULL == p_gctx )  goto __gen_overflow;
 
+                // Either get the most recent or generate if there is no most-recent.
+                int was_regen = 0;
+                fuzz_str_t* p_str = p_gctx->p_most_recent;
+                if ( NULL == p_str ) {
+                    // Hasn't been shuffled yet; generate the first item in the sub-factory.
+                    p_str = Generator__get_next( p_gctx );
+                    was_regen = 1;
+                }
+
                 switch ( p_ref->type ) {
 
                     case ref_reference : {
                         // Basically mimic what the static string stuff below does but DO NOT
                         //   utilize any strxyz methods since null bytes can exist in this buffer.
-                        fuzz_str_t* p_str = p_gctx->p_most_recent;
-                        if ( NULL == p_str ) {
-                            // Hasn't been shuffled yet; generate the first item in the sub-factory.
-                            p_str = Generator__get_next( p_gctx );
-                        }
                         size_t z = p_str->length;
 
                         // Mindful of overflows.
-                        if ( ((sizeof(char)*iters*z)+p_current) >= p_ctx->p_pool_end )  goto __gen_overflow;
+                        if ( ((sizeof(char)*iters*z)+p_current) >= p_ctx->p_pool_end )
+                            goto __gen_overflow;
 
                         // Write the stream.
                         for ( ; processed < iters; processed++ ) {
                             memcpy( p_current, p_str->output, z );
-printf("P (%lu|%lu): '%s'\n", iters, z, p_current );
                             p_current += z;
                         }
 
                         break;
                     }
 
+                    // TODO: It would be nice to also be able to output lens in binary instead of a string.
+                    //    This could help make stuff like data structure fuzzing more viable with this.
+//                    case ref_count_binary :
+                    case ref_count_nullterm :
                     case ref_count : {
+                        size_t len = p_str->length + (1*(ref_count_nullterm == p_ref->type));
+                        char* p_len = (char*)calloc( 32, sizeof(char) );
+
+                        snprintf ( p_len, 32, "%lx", len );
+                        *(p_len+31) = '\0';   //paranoia
+
+                        // Muh overflow.
+                        if ( ((sizeof(char)*iters*strlen(p_len))+p_current) >= p_ctx->p_pool_end )
+                            goto __gen_overflow;
+
+                        for ( ; processed < iters; processed++ ) {
+                            memcpy( p_current, p_len, strlen(p_len) );
+                            p_current += strlen(p_len);
+                        }
+
+                        free( p_len );
                         break;
                     }
 
                     case ref_shuffle : {
+                        // When regenerating the pattern, make sure to free the old subfactory resource.
+                        //   If this is already a fresh shuffle, don't do anything (saves time).
+                        // NOTE: This ignores the 'iters' value to save time. Only one shuffle at a time.
+                        if ( !was_regen ) {
+                            free( (void*)p_str->output ); free( p_str );
+                            Generator__get_next( p_gctx );
+                        }
                         break;
                     }
 
