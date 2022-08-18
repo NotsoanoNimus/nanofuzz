@@ -39,8 +39,15 @@ typedef enum _reference_type {
 // A finalized, contiguous stream of blocks which is used to construct fuzzer output.
 typedef struct _fuzz_factory_t fuzz_factory_t;
 
-// A sub-structure which holds reference/variable information.
-typedef struct _fuzz_reference_t fuzz_reference_t;
+// A sub-structure which holds reference/variable information inside the final
+//   factory node_seq.
+typedef struct _fuzz_reference_t {
+    // This label is the name of the variable assigned to the block when type is
+    //   a declaration, the reference name otherwise. It's the 'glue' to the context.
+    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
+    // The sub-type for the reference.
+    reference_type type;
+} fuzz_reference_t;
 
 // A ranging structure used in the pattern blocks to determine the amount of times, if set,
 //   to repeat a block of pattern data. This is populated by the 'repetition' mechanism.
@@ -81,6 +88,8 @@ void* PatternFactory__get_data( fuzz_factory_t* p_fact );
 size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact );
 // Get the attached factory count of blobbed pattern blocks.
 size_t PatternFactory__get_count( fuzz_factory_t* p_fact );
+// Get the shard index pointer for the factory.
+void* PatternFactory__get_shard_index_ptr( fuzz_factory_t* p_fact );
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
 void PatternFactory__delete( fuzz_factory_t* p_fact );
 // Explain the procedural string generation process, outputting to the given stream/file.

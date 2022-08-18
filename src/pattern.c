@@ -27,6 +27,14 @@ typedef struct _fuzz_reference_shard_t {
     fuzz_gen_ctx_t* p_gen_ctx;
 } fuzz_ref_shard_t;
 
+// Internal structure for indexing unsigned-long hashes to gen ctx pointers on the factory.
+//   This struct is populated in the __compress... function so gen lookups don't need to do
+//   haystack searches for variable labels and instead can use a very fast hash lookup.
+typedef struct _fuzz_hash_to_gen_ctx_t {
+    unsigned long _hash;    //the hash (using 'djb2')
+    fuzz_gen_ctx_t* _ctx;   //the generator context assoc w/ the string hash
+} __attribute__((__packed__))  _hash_to_gen_ctx_t;
+
 // Represents a single contiguous block of memory which all of the block items get joined into.
 //   This is what nanofuzz will actually use in generating content.
 // TODO: Add a flag for 'sub-factory' to prevent loops or stack overflows by chaining/nesting vardecls.
@@ -37,6 +45,8 @@ struct _fuzz_factory_t {
     size_t count;
     // List of references attached to this factory as sub-factories by variable name.
     List_t* ref_shards;
+    // See struct definition above.
+    _hash_to_gen_ctx_t shard_idx[FUZZ_MAX_VARIABLES];
 };
 
 // Creates a context for a fuzzing pattern parser. This is so static variables
@@ -50,16 +60,6 @@ struct _fuzz_ctx_t {
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
     // Context-dependent list of varname-to-pattern-block associations.
-};
-
-// A sub-structure which holds reference/variable information inside the final
-//   factory node_seq.
-struct _fuzz_reference_t {
-    // This label is the name of the variable assigned to the block when type is
-    //   a declaration, the reference name otherwise. It's the 'glue' to the context.
-    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-    // The sub-type for the reference.
-    reference_type type;
 };
 
 
@@ -200,6 +200,12 @@ size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact ) {
 // Get the attached factory count of blobbed pattern blocks.
 size_t PatternFactory__get_count( fuzz_factory_t* p_fact ) {
     return p_fact->count;
+}
+
+
+// Get the shard index pointer for the factory.
+void* PatternFactory__get_shard_index_ptr( fuzz_factory_t* p_fact ) {
+    return &(p_fact->shard_idx[0]);
 }
 
 
@@ -417,6 +423,56 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     else
         List__delete( ll_shards );
 
+    // If any sub-factories are attached, index their labels into the shard_idx.
+    // NOTE: This also replicates the pointer to shard_idx into each child factory.
+    // TODO: Cleanup, consolidate, and consider turning the primary hashtable into a single alloc
+    if ( NULL != p_ff->ref_shards && List__get_count( p_ff->ref_shards ) > 0 ) {
+        ListNode_t* p_shard = List__get_head( p_ff->ref_shards );
+
+        size_t count = 0;
+        while ( NULL != p_shard ) {
+            if ( NULL == p_shard->node )  continue;
+            _hash_to_gen_ctx_t* p_idx = (_hash_to_gen_ctx_t*)&(p_ff->shard_idx[count]);
+
+            fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)(p_shard->node);
+            char* p_label = &(p_ref->label[0]);
+
+            // Call the same minimalistic hash function used in the Generator file.
+            //   Using the 'djb2' hashing algorithm.
+char* p_preserve = p_label;
+            unsigned long hash = 5381;
+            int c;
+            while ( (c = *p_label++) )
+                hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
+printf( "(%p) PATTERN HASH (%lu) for LABEL '%s' with gtx at '%p'\n", p_idx, hash, p_preserve, p_ref->p_gen_ctx );
+
+            p_idx->_hash = hash;
+            p_idx->_ctx  = p_ref->p_gen_ctx;
+
+            p_shard = p_shard->next;
+            count++;
+        }
+
+        // Replicate the reference hashtable into all subnodes.
+        count = 0;
+        p_shard = List__get_head( p_ff->ref_shards );
+        while ( NULL != p_shard ) {
+            if ( NULL == p_shard->node )  continue;
+            fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)(p_shard->node);
+
+            fuzz_factory_t* p_subfact = Generator__get_context_factory( p_ref->p_gen_ctx );
+            if ( NULL != p_subfact ) {
+                memcpy(
+                    &(p_subfact->shard_idx[count]),
+                    &(p_ff->shard_idx[count]),
+                    sizeof(_hash_to_gen_ctx_t)
+                );
+            }
+
+            p_shard = p_shard->next;
+            count++;
+        }
+    }
 
     // Discard the context since a pointer to the err ctx is available.
     __Context__delete( p_ctx, pp_err );
@@ -588,9 +644,13 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                             ll_shards, 0, p_varname, strlen(p_varname) );
 
                         if ( NULL != p_shard ) {
-                            free( (void*)p_lvl0_sub );
-                            p_lvl0_sub = NULL;
                             VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
+                        }
+
+                        // Another check: throw an error if this declaration exceeds the arraylist limitation.
+                        //   TODO: Fix static '16' in this string
+                        if ( List__get_count( ll_shards ) >= FUZZ_MAX_VARIABLES ) {
+                            VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 16." );
                         }
 
                         // The count of list items to be deleted lives in the data of the 'ret' pattern
@@ -606,13 +666,12 @@ printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
 
                         if ( NULL != p_err && Error__has_error( p_err ) ) {
                             Error__print( p_err, stderr );
-                            free( (void*)p_lvl0_sub );
-                            p_lvl0_sub = NULL;
                             VAR_ERR( "Error in variable declaration '<$...>' statement." );
                         }
 
                         // Create the generator context.
                         fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff, FUZZ_GEN_DEFAULT_REF_CTX_TYPE );
+printf( "GENCTX: |%p|%s|\n", p_gctx, p_varname );
 
                         // Nullify this nest's (nest 0) tracker.
                         *((p_ctx->p_nest_tracker)+nest_level) = NULL;
@@ -671,7 +730,12 @@ printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
                 __var_ref_error:
                     if ( p_varname )  free( p_varname );
                     if ( p_ref )  free( p_ref );
+
+                    if ( NULL != p_lvl0_sub )  free( (void*)p_lvl0_sub );
+                    p_lvl0_sub = NULL;
+
                     FUZZ_ERR_IN_CTX( p_errmsg );
+                    break;   //safety-first
             }
 
             // ********** RANGES **********

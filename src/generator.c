@@ -41,9 +41,54 @@ struct _fuzz_generator_context_t {
     gen_pool_type type;              // controls the size of the alloc'd data pool
     fuzz_factory_t* p_factory;       // core of the context: constructed factory
     xoroshiro256p_state_t* p_prng;   // PRNG structure (TODO: move to state vec?)
+    fuzz_str_t* p_most_recent;       // points to the most recently-generated stream
     unsigned char* p_data_pool;      // stores generated data
     unsigned char* p_pool_end;       // marks the end of the data pool in memory
 };
+
+
+
+// Inline method to look up a string as a hashtable value.
+static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t* p_ff, char* p_label ) {
+    // Using the 'djb2' hashing algorithm.
+char* p_preserve = p_label;
+    unsigned long hash = 5381;
+    int c;
+    while ( (c = *p_label++) )
+        hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
+printf( "HASH (%lu) for LABEL '%s'\n", hash, p_preserve );
+
+    // Search the index opaquely for the hash. If found, return the pointer. Else, NULL.
+    void* p_scroll;
+    size_t i;
+    size_t struct_size = (sizeof(unsigned long)+sizeof(fuzz_gen_ctx_t*));
+    for (
+        p_scroll = PatternFactory__get_shard_index_ptr( p_ff ), i = 0;
+        i < FUZZ_MAX_VARIABLES;
+        i++
+    ) {
+printf("SCROLLGENGEN: (%p) (%lu) (%lu:%p)\n", p_scroll, struct_size, *((unsigned long*)(p_scroll + (i*struct_size))), *((fuzz_gen_ctx_t**)(p_scroll + (i*struct_size) + sizeof(unsigned long))) );
+        if (
+            0 == memcmp(
+                (p_scroll + (i*struct_size)),
+                &hash,
+                sizeof(unsigned long)
+            )
+        ) {
+            // The value inside the private struct is a pointer, this is a pointer to that.
+            //   Thus, a double-pointer is needed to dereference the genctx fully.
+            return *(
+                (fuzz_gen_ctx_t**)(
+                    p_scroll
+                    + (i*struct_size)
+                    + sizeof(unsigned long)
+                )
+            );
+        }
+    }
+
+    return NULL;
+}
 
 
 
@@ -57,6 +102,7 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     x->type = type;
     x->p_factory = p_factory;
     x->p_prng = xoroshiro__new( time(NULL) );
+    x->p_most_recent = NULL;
     x->p_data_pool = (unsigned char*)calloc( 1,
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
     x->p_pool_end = (
@@ -100,6 +146,9 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
 
 // Generate a new fuzzer output string.
 //   In this function, SPEED IS ESSENTIAL to maximize throughput.
+// TODO: At the end of gen, check the shards list contexts and free all current fuzz_str_t objects from each.
+//   This must only apply to sub-factories and not the parent context since the fuzz_str_t from the parent
+//   might be used anywhere and needs to be freed by the implementer.
 fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     if ( NULL == p_ctx )  return NULL;
 
@@ -144,6 +193,52 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         switch ( pip->type ) {
 
             case reference : {
+                fuzz_reference_t* p_ref = (fuzz_reference_t*)(pip->data);
+printf( "GENREF '%s'\n", p_ref->label );
+                fuzz_gen_ctx_t* p_gctx =
+                    __Generator__subcontext_for_label( p_ctx->p_factory, &(p_ref->label[0]) );
+printf( "GENCTX: |%p|%p|%p|%d|\n", p_gctx, p_gctx->p_factory, p_gctx->p_prng, p_gctx->type );
+
+                // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
+                if ( NULL == p_gctx )  goto __gen_overflow;
+
+                switch ( p_ref->type ) {
+
+                    case ref_reference : {
+                        // Basically mimic what the static string stuff below does but DO NOT
+                        //   utilize any strxyz methods since null bytes can exist in this buffer.
+                        fuzz_str_t* p_str = p_gctx->p_most_recent;
+                        if ( NULL == p_str ) {
+                            // Hasn't been shuffled yet; generate the first item in the sub-factory.
+                            p_str = Generator__get_next( p_gctx );
+                        }
+                        size_t z = p_str->length;
+
+                        // Mindful of overflows.
+                        if ( ((sizeof(char)*iters*z)+p_current) >= p_ctx->p_pool_end )  goto __gen_overflow;
+
+                        // Write the stream.
+                        for ( ; processed < iters; processed++ ) {
+                            memcpy( p_current, p_str->output, z );
+printf("P (%lu|%lu): '%s'\n", iters, z, p_current );
+                            p_current += z;
+                        }
+
+                        break;
+                    }
+
+                    case ref_count : {
+                        break;
+                    }
+
+                    case ref_shuffle : {
+                        break;
+                    }
+
+                    default : break;   // if this somehow happens, do nothing; just move on
+                }
+
+                // Move to the next block. References do not loop.
                 pip++;
                 break;
             }
@@ -281,6 +376,9 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     } else {
         p_ret->output = NULL;
     }
+
+    // Save the pool information to the current generator context.
+    p_ctx->p_most_recent = p_ret;
 
     return p_ret;
 
