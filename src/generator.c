@@ -88,6 +88,10 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
             if ( ((p_ctx->state).counter + u) )
                 free( *((p_ctx->state).counter + u) );
 
+        // TODO: Experimental.
+        if ( p_ctx->p_factory )
+            PatternFactory__delete( p_ctx->p_factory );
+
         free( p_ctx );
     }
 }
@@ -140,6 +144,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         switch ( pip->type ) {
 
             case reference : {
+                pip++;
                 break;
             }
 
@@ -323,4 +328,11 @@ void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
         + (p_ctx->p_data_pool)
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
     );
+}
+
+
+
+// Return the factory used by a gen ctx.
+fuzz_factory_t* Generator__get_context_factory( fuzz_gen_ctx_t* p_ctx ) {
+    return p_ctx->p_factory;
 }

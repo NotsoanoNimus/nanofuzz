@@ -21,6 +21,8 @@
 #define FUZZ_MAX_NESTING_COMPLEXITY 5
 // Maximum amount of separate items in a single 'range' mechanism (i.e. [1-2,3-4,5-6,...]).
 #define FUZZ_MAX_PATTERN_RANGE_FRAGMENTS 16
+// Max amount of ref shards allowed per fuzz_factory_t context.
+#define FUZZ_MAX_VARIABLES 16
 
 
 

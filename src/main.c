@@ -302,7 +302,7 @@ int main( int argc, char* const argv[] ) {
     // Free resource allocations. All done.
     free( p_pattern_contents );
     Generator__delete_context( p_genctx );
-    PatternFactory__delete( p_pattern_factory );
+//    PatternFactory__delete( p_pattern_factory );
 }
 
 

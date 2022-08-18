@@ -114,10 +114,16 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
     if ( NULL == x ) {
         // Empty list; nothing to remove.
         return NULL;
-    } else if ( x == node && NULL == x->next ) {
-        // When the node to remove is the only list item, free it and set the head to null.
-        free( node );
-        __List__set_head( list, NULL );
+    } else if ( x == node ) {
+        if ( NULL == x->next ) {
+            // When the node to remove is the only list item, free it and set the head to null.
+            free( node );
+            __List__set_head( list, NULL );
+        } else {
+            // When removing the head but with following items, set HEAD to the next list item.
+            __List__set_head( list, x->next );
+            free( node );
+        }
         return NULL;
     }
 
@@ -128,7 +134,10 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
         if ( x == node ) {
             // Point the previous node to the next node, thereby bridging OVER this list item and removing it.
             prev_node->next = x->next;
+
+            if ( x->node )  free( x->node );
             free( x );
+
             return prev_node;
         }
         // When the node isn't found, keep going forward in the list.
@@ -143,11 +152,21 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node ) {
 
 // Get a list node using the specified property at the given offset of the given size and with the given value.
 ListNode_t* List__get_node( List_t* list, int node_property_offset, void* property_value, size_t property_size ) {
-    if ( NULL == property_value || property_size <= 0 )  return NULL;
+    if (
+           NULL == property_value || property_size <= 0
+        || node_property_offset > 65535 || node_property_offset < 0
+    ) return NULL;
 
     // For each node in the list, check the property value at the given offset against the provided comparator.
     for ( ListNode_t* x = List__get_head( list ); NULL != x; x = x->next ) {
-        if ( memcmp( ((x->node)+node_property_offset), property_value, property_size ) == 0 )  return x;
+        if ( !x || !(x->node) )  continue;
+        if (
+            0 == memcmp(
+                ((x->node)+node_property_offset),
+                property_value,
+                property_size
+            )
+        )  return x;
     }
 
     // If no matching nodes were found, simply return a NULL.

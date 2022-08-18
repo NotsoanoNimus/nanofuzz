@@ -29,7 +29,11 @@ struct _fuzz_error_fragment_t {
 
 // Gets whether the list actually has any errors by checking the length of the err list.
 int Error__has_error( fuzz_error_t* p_err ) {
-    return ( p_err && p_err->p_fragments && List__get_count( p_err->p_fragments ) > 0 );
+    if ( NULL != p_err )
+        if ( NULL != p_err->p_fragments )
+            return (List__get_count( p_err->p_fragments ) > 0);
+//    return ( p_err && p_err->p_fragments && List__get_count( p_err->p_fragments ) > 0 );
+    return 0;
 }
 
 
@@ -50,8 +54,10 @@ void Error__delete( fuzz_error_t* p_err ) {
             // Don't do a delete here (the deep delete happens above(^)); just clear node-set.
             List__clear( p_err->p_fragments );
             free( p_err->p_fragments );
+            p_err->p_fragments = NULL;
         }
         free( p_err );
+        p_err = NULL;
     }
 }
 

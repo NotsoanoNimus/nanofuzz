@@ -15,13 +15,28 @@
 
 
 
+// A piece of disparate gen_ctx objects attached to a fuzz_factory as sub-factories.
+typedef struct _fuzz_reference_shard_t {
+    // The string label assigned to this generator context. This is mapped from
+    //   the fuzz_reference_t to get the context's generator as needed.
+    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
+    // The generator context to use when shuffling the variable or initializing it.
+    //   Since this stands on its own apart from the primary factory and generator,
+    //   a special process is required to 'free' this when the outer factory is
+    //   being deleted and this instance's type is a 'declaration'.
+    fuzz_gen_ctx_t* p_gen_ctx;
+} fuzz_ref_shard_t;
+
 // Represents a single contiguous block of memory which all of the block items get joined into.
 //   This is what nanofuzz will actually use in generating content.
+// TODO: Add a flag for 'sub-factory' to prevent loops or stack overflows by chaining/nesting vardecls.
 struct _fuzz_factory_t {
     // Pointer to the blob of nodes...
     void* node_seq;
     // ... of size count, each = sizeof(fuzz_pattern_block_t)
     size_t count;
+    // List of references attached to this factory as sub-factories by variable name.
+    List_t* ref_shards;
 };
 
 // Creates a context for a fuzzing pattern parser. This is so static variables
@@ -37,18 +52,14 @@ struct _fuzz_ctx_t {
     // Context-dependent list of varname-to-pattern-block associations.
 };
 
-// A sub-structure which holds reference/variable information.
+// A sub-structure which holds reference/variable information inside the final
+//   factory node_seq.
 struct _fuzz_reference_t {
+    // This label is the name of the variable assigned to the block when type is
+    //   a declaration, the reference name otherwise. It's the 'glue' to the context.
+    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
     // The sub-type for the reference.
     reference_type type;
-    // This label is the name of the variable assigned to the block when type is
-    //   a declaration, the reference name otherwise.
-    const char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-    // The generator context to use when shuffling the variable or initializing it.
-    //   Since this stands on its own apart from the primary factory and generator,
-    //   a special process is required to 'free' this when the outer factory is
-    //   being deleted and this instance's type is a 'declaration'.
-    fuzz_gen_ctx_t* p_gen_ctx;
 };
 
 
@@ -56,7 +67,7 @@ struct _fuzz_reference_t {
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
-static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern );
+static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards );
 
 
 
@@ -117,12 +128,14 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
 }
 
 // Destroy a context. This frees the context, error handler (if no errors), & tracker.
-static inline void __Context__delete( struct _fuzz_ctx_t* const p ) {
+static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
     if ( p ) {
         if ( p->p_nest_tracker )  free( p->p_nest_tracker );
 
-        if (  p->p_err && 0 == Error__has_error( p->p_err )  )
+        if (  p->p_err && 0 == Error__has_error( p->p_err )  ) {
             Error__delete( p->p_err );
+            if ( pp_saveptr )  *pp_saveptr = NULL;
+        }
 
         free( (void*)p );
     }
@@ -200,20 +213,24 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
     fuzz_pattern_block_t* p_base_block = (fuzz_pattern_block_t*)(p_fact->node_seq);
     for ( size_t i = 0; i < p_fact->count; i++ ) {
         fuzz_pattern_block_t* x = (p_base_block + i);
-
-        if ( NULL != x && x->data ) {
-            // However, there is one exception for ref.ref_declaration blocks specifically,
-            //   since the sub-generator-context needs to be nuked.
-            if ( reference == x->type ) {
-
-                fuzz_reference_t* p_ref = (fuzz_reference_t*)(x->data);
-                if ( ref_declaration == p_ref->type && p_ref->p_gen_ctx )
-                    Generator__delete_context( p_ref->p_gen_ctx );
-
-            }
-
+        if ( NULL != x && NULL != x->data )
             free( x->data );
+    }
+
+    // Delete all the variables and factories attached as variables.
+    if ( p_fact->ref_shards ) {
+        ListNode_t* p_shard = List__get_head( p_fact->ref_shards );
+
+        while ( NULL != p_shard ) {
+            if ( NULL != p_shard->node ) {
+                fuzz_gen_ctx_t* p_gen_ctx = ((fuzz_ref_shard_t*)(p_shard->node))->p_gen_ctx;
+                Generator__delete_context( p_gen_ctx );
+            }
+            p_shard = p_shard->next;
         }
+
+        // Handle node and fuzz_ref_shard_t clean-up.
+        List__delete( p_fact->ref_shards );
     }
 
     // Free the pattern_block blob.
@@ -232,14 +249,45 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
         return;
     }
 
+    // Recursively explain attached sub-factories.
+    if ( NULL != p_fact->ref_shards && List__get_count( p_fact->ref_shards ) > 0 ) {
+        fprintf( fp_stream, "@=@=@=@ Factory contains [%lu] associated sub-factories. @=@=@=@\n",
+            List__get_count( p_fact->ref_shards ) );
+
+        ListNode_t* p_node_subfact = List__get_head( p_fact->ref_shards );
+        while ( NULL != p_node_subfact && NULL != p_node_subfact->node ) {
+            // Oh the joys of indirection and association
+            fuzz_factory_t* p_subfact = Generator__get_context_factory(
+                ((fuzz_ref_shard_t*)(p_node_subfact->node))->p_gen_ctx
+            );
+
+            fprintf( fp_stream, "\n===> Sub-factory '%s':\n",
+                ((fuzz_ref_shard_t*)(p_node_subfact->node))->label );
+            PatternFactory__explain( fp_stream, p_subfact );
+
+            p_node_subfact = p_node_subfact->next;
+        }
+
+        fprintf( fp_stream, "\n\n" );
+        fprintf( fp_stream, "********** Parent Factory **********\n" );
+    }
+
     size_t nest = 0;
 
     // Iterate the factory nodes and explain each.
     for ( size_t i = 0; i < p_fact->count; i++ ) {
+        // Get the target pattern block ptr.
         fuzz_pattern_block_t* p = (fuzz_pattern_block_t*)(p_fact->node_seq + (i*sizeof(fuzz_pattern_block_t)));
         if ( NULL == p ) {
             fprintf( fp_stream, "~~ Misunderstood pattern block at node '%lu'. This is problematic!\n", i );
             continue;
+        }
+
+        // Protect against possible overflows by seeing if 'nest' is over the complexity limit.
+        if ( nest > FUZZ_MAX_NESTING_COMPLEXITY ) {
+            printf( "~~ Problem during explanation of block with type [%d]:"
+                " 'nest' overflow: [%lu]", p->type, nest );
+            break;
         }
 
         // Preliminary/Common string output and setup.
@@ -266,9 +314,10 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(p->data);
 
                 switch ( p_ref->type ) {
-                    case ref_reference: {  p_reftype = "Paste pre-generated"; break;  }
-                    case ref_count    : {  p_reftype = "Output the length of the"; break;  }
-                    case ref_shuffle  : {  p_reftype = "Regenerate"; break;  }
+//                    case ref_declaration : {  p_reftype = "Review pre-declared"; break;  }
+                    case ref_reference   : {  p_reftype = "Paste pre-generated"; break;  }
+                    case ref_count       : {  p_reftype = "Output the length of the"; break;  }
+                    case ref_shuffle     : {  p_reftype = "Regenerate"; break;  }
                     default : {
                         fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" );
                         goto __explain_ref_unknown;
@@ -351,16 +400,27 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     // Create a new pattern context.
     struct _fuzz_ctx_t* const p_ctx = __Context__new();
 
+
     // If a pointer to capture the error handler is given, point it properly.
     if ( pp_err && NULL == *pp_err )
         *pp_err = p_ctx->p_err;
 
+
     // Parse the pattern and manufacture the factory (meta). MAGIC!
-    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
+    List_t* ll_shards = List__new( FUZZ_MAX_VARIABLES );
+
+    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str, ll_shards );
     fuzz_factory_t* p_ff = __compress_List_to_factory( p_the_sequence );
 
+    if ( NULL != p_ff )
+        p_ff->ref_shards = ll_shards;
+    else
+        List__delete( ll_shards );
+
+
     // Discard the context since a pointer to the err ctx is available.
-    __Context__delete( p_ctx );
+    __Context__delete( p_ctx, pp_err );
+
 
     return p_ff;
 }
@@ -372,23 +432,32 @@ static const char special_chars[] = "\\[{(<>)}]";
 // TODO: get rid of useless error codes (might need them later for stats?)
 #define FUZZ_ERR_IN_CTX(errstr) { \
     Error__add( p_ctx->p_err, p_ctx->nest_level, (p-p_pattern), FUZZ_ERROR_INVALID_SYNTAX, errstr ); \
+    if ( p_new_block )  free( p_new_block ); \
+    p_new_block = NULL; \
     goto __err_exit; \
+}
+#define VAR_ERR(x) { \
+    p_errmsg = x; \
+    goto __var_ref_error; \
 }
 #define BAD_CLOSING_CHAR(x) { \
     FUZZ_ERR_IN_CTX( "Unexpected '"x"'. Please escape this character ('\\"x"')" ); \
     break; \
 }
+
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
-static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern ) {
+static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards ) {
     size_t len, nest_level;
     const char* p;
+    const char* p_lvl0_sub;   // see the '<' section for variable declarations
     List_t* p_seq;
 
     len = strnlen( p_pattern, (FUZZ_MAX_PATTERN_LENGTH-1) );
     nest_level = p_ctx->nest_level;
 
     p = p_pattern;
+    p_lvl0_sub = NULL;
     p_seq = List__new( FUZZ_MAX_PATTERN_LENGTH );
 
     // Let's go!
@@ -436,61 +505,173 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                     FUZZ_ERR_IN_CTX( "Pattern contains unclosed or empty variable statement '<>'" );
                 }
 
+                const char* start = p+1;   // set start to the first character.
+
+                // Make sure the variable name referenced is 1-8 chars. This doesn't count
+                //   the operator [$@#%] as a char (hence the +1).
+                // TODO: Fix the static '8' in the error string
+                if ( (end-1 - start) > (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1) ) {
+                    FUZZ_ERR_IN_CTX( "Variable '<>' names cannot be longer than 8 characters" );
+                } else if ( (end-1 - start) < 1 ) {
+                    FUZZ_ERR_IN_CTX( "Variable '<>' names must be at least 1 character in length" );
+                }
+
+                // Store the referenced variable name and prepare a reference block.
+                char* p_varname = strndup( (start+1), (end-start-1) );
+
+                fuzz_reference_t* p_ref = (fuzz_reference_t*)calloc( 1, sizeof(fuzz_reference_t) );
+                memcpy ( &(p_ref->label[0]), p_varname,
+                    strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
+                p_ref->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
+
                 // Spin up the new block.
                 p_new_block = NEW_PATTERN_BLOCK;
+                p_new_block->type = reference;
+                p_new_block->data = p_ref;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
+
+                // This holds a pointer to the static error string to output, when applicable.
+                const char* p_errmsg = NULL;   // used w/ VAR_ERR macro
 
                 // The length of the inner content must be upper-case and consist of:
                 //   + Operation specifier (1 char)
                 //   + Upper-case Label (1-8 chars)
                 // Format: <[$@#%]NAMENAME>
-                const char* start = p+1;
                 switch ( *start ) {
 
-                    case '$': {
-                        // When defining a NEW variable label, the previous node MUST be a 'ret' type, indicating
-                        //   that the program had just finished parsing a subsequence.
-                        if ( NULL == *((p_ctx->p_nest_tracker)+nest_level)
-                            || sub != (*((p_ctx->p_nest_tracker)+nest_level))->type )
-                        {
+                    case '$' : {
+                        // Declarations don't save onto the node chain.
+                        if ( p_new_block ) {
                             free( p_new_block );
-                            FUZZ_ERR_IN_CTX( "Labels '<$...>' can only be applied to subsequence '()' mechanisms" );
+                            p_new_block = NULL;
                         }
 
-                        
+                        // This will be tricky. The 'sub' being used needs to be at nest level 0 since
+                        //   variables shouldn't be define-able as sub-local (since they're not).
+                        //   The reason we need level 0 is because the sub will be deleted from this
+                        //   factory and p_seq linked list, to go into its own sub-factory.
+                        if ( 0 != nest_level ) {
+                            VAR_ERR( "Declarations '<$...>' cannot be used within Subsequence '()' operators." );
+                        }
 
+                        // When defining a NEW variable label, the previous node MUST be a 'sub' type, indicating
+                        //   that the program had just finished parsing a subsequence. (NOTE: 'ret' is the final
+                        //   element at the inner nest, not the outer.)
+                        // NOTE: While <$XYZ> _can_ follow a range mechanism, the range will simply be ignored.
+                        //       This is the same as the ability to chain ranges but keep the final one.
+                        // TODO: ^ Fix by setting the nest_level ptr to NULL when a range is applied??
+                        ListNode_t* p_ret_node = List__get_head( p_seq );
+                        fuzz_pattern_block_t* p_ret = (p_ret_node && p_ret_node->node)
+                            ? ((fuzz_pattern_block_t*)(p_ret_node->node))
+                            : NULL;
+
+                        if (
+                               ( NULL == *((p_ctx->p_nest_tracker)+nest_level) )
+                            || ( sub != (*((p_ctx->p_nest_tracker)+nest_level))->type )
+                            || ( !p_ret || !(p_ret->data) )
+                            || ( ret != p_ret->type )
+                        ) {
+                            VAR_ERR( "Declarations '<$...>' can only be applied to subsequence '()' mechanisms" );
+                        }
+
+                        // Luckily, the lvl0 string ptr can help here to directly give the pattern
+                        //   string used to initialize the sub-factory and gen ctx.
+                        //   It is CRITICAL that this resource be freed and pointed to NULL when done.
+                        if ( NULL == p_lvl0_sub || strlen(p_lvl0_sub) < 0 ) {
+                            VAR_ERR( "Declarations '<$...>' must be created at nest-level ZERO only." );
+                        }
+
+                        // Ensure a variable by this explicit name doesn't already exist on the current factory.
+                        fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_node(
+                            ll_shards, 0, p_varname, strlen(p_varname) );
+
+                        if ( NULL != p_shard ) {
+                            free( (void*)p_lvl0_sub );
+                            p_lvl0_sub = NULL;
+                            VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
+                        }
+
+                        // The count of list items to be deleted lives in the data of the 'ret' pattern
+                        //   block, +1 for the 'ret' itself, and ultimately +1 for the preceding 'sub' block.
+                        for ( size_t del = (*((size_t*)(p_ret->data)) + 2); del > 0; del-- )
+                            List__drop_node(  p_seq, List__get_head( p_seq )  );
+
+
+                        // Create the new factory.
+                        fuzz_error_t* p_err = NULL;
+printf( "VARDECL, NEW FF: |%s|\n", p_lvl0_sub );
+                        fuzz_factory_t* p_ff = PatternFactory__new( p_lvl0_sub, &p_err );
+
+                        if ( NULL != p_err && Error__has_error( p_err ) ) {
+                            Error__print( p_err, stderr );
+                            free( (void*)p_lvl0_sub );
+                            p_lvl0_sub = NULL;
+                            VAR_ERR( "Error in variable declaration '<$...>' statement." );
+                        }
+
+                        // Create the generator context.
+                        fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff, FUZZ_GEN_DEFAULT_REF_CTX_TYPE );
+
+                        // Nullify this nest's (nest 0) tracker.
+                        *((p_ctx->p_nest_tracker)+nest_level) = NULL;
+
+                        // FINALLY, create and populate the shard and attach it to the outer factory.
+                        fuzz_ref_shard_t* p_fs = (fuzz_ref_shard_t*)calloc( 1, sizeof(fuzz_ref_shard_t) );
+                        p_fs->p_gen_ctx = p_gctx;
+                        memcpy ( &(p_fs->label[0]), p_varname,
+                            strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
+                        p_fs->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
+
+                        List__add_node( ll_shards, p_fs );
+
+
+                        // All done here.
+                        free( (void*)p_lvl0_sub );
+                        p_lvl0_sub = NULL;
                         break;
                     }
 
-                    case '@': {
-                        break;
-                    }
+                    case '@' :
+                    case '#' :
+                    case '%' : {
+                        // Check whether the variable name exists in the ll_shards linked list.
+                        fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_node(
+                            ll_shards, 0, p_varname, strlen(p_varname) );
 
-                    case '#': {
-                        break;
-                    }
+                        if ( NULL == p_shard ) {
+                            VAR_ERR( "Variable references '<@...>' an undeclared variable name" );
+                        }
 
-                    case '%': {
+                        // Set the type and the prev node tracker for the nest level.
+                        if ( '@' == *start )
+                             p_ref->type = ref_reference;
+                        else if ( '#' == *start )
+                             p_ref->type = ref_count;
+                        else
+                             p_ref->type = ref_shuffle;
+
+                        *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                         break;
                     }
 
                     default : {
-                        free( p_new_block );
-                        FUZZ_ERR_IN_CTX( "Unrecognized variable '<>' statement type. Valid options are $, @, #, or %" );
+                        VAR_ERR( "Unrecognized variable '<>' statement type. Valid options are $, @, #, or %" );
                         break;
                     }
                 }
 
-                // Make sure the variable name referenced is 1-8 chars.
-                start++;
-                if ( (end-start) > 8 ) {
-                    FUZZ_ERR_IN_CTX( "Variable '<>' names cannot be longer than 8 characters" );
-                } else if ( end-start < 1 ) {
-                    FUZZ_ERR_IN_CTX( "Variable '<>' names must be at least 1 character in length" );
-                }
-
                 // Set 'p' to end. It will increment to the next character after the for-loop continues.
+                if ( p_varname )  free( p_varname );
+                // NOTE: Do NOT free the fuzz_reference_t ptr here
                 p = end;
                 break;
+
+                __var_ref_error:
+                    if ( p_varname )  free( p_varname );
+                    if ( p_ref )  free( p_ref );
+                    FUZZ_ERR_IN_CTX( p_errmsg );
             }
 
             // ********** RANGES **********
@@ -618,9 +799,15 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                 //// RECURSION: Prepare a new substring and parse it anew.
                 char* p_sub = (char*)strndup( (p+1), (p_seek-1-p) );
+
+                // --- If the nest_level is zero, save the sub string as applicable for vars.
+                //     The ptr is only ever NULL when the old resource was already freed.
+                if ( NULL != p_lvl0_sub )  free( (void*)p_lvl0_sub );
+                if ( 0 == nest_level ) p_lvl0_sub = strdup( p_sub );
+
 //printf( "SUB: |%s|\n", p_sub );
                 (p_ctx->nest_level)++;   // increase the nest level and enter
-                List_t* p_pre = __parse_pattern( p_ctx, p_sub );
+                List_t* p_pre = __parse_pattern( p_ctx, p_sub, ll_shards );
                 (p_ctx->nest_level)--;   // ... and now leave the nest
                 free( p_sub );
 
@@ -699,7 +886,13 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
 
         __err_exit:
-            if ( p_new_block )  free( p_new_block );
+            if ( p_new_block )
+                free( p_new_block );
+
+            if ( NULL != p_lvl0_sub ) {
+                free ( (void*)p_lvl0_sub );
+                p_lvl0_sub = NULL;
+            }
 
             // Even on crashes, collate the list so its contents can be deleted properly.
             fuzz_factory_t* x = __compress_List_to_factory( p_seq );
@@ -707,6 +900,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
             return NULL;
     }
+
+    // Free this meta-tracker if it's still lingering.
+    if ( NULL != p_lvl0_sub )
+        free ( (void*)p_lvl0_sub );
 
     // Return the linked list representing the sequence of generation.
     if ( List__get_count( p_seq ) > 0 ) {

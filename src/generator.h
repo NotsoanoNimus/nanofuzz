@@ -19,7 +19,7 @@
 #define FUZZ_GEN_CTX_POOL_MULTIPLIER (1 * 1024 * 1024)
 // --- The default type associated with variable-based genctx declarations.
 // ---   This is for all <> variable mechanisms.
-#define FUZZ_GEN_DEFAULT_REF_CTX_TYPE tiny
+#define FUZZ_GEN_DEFAULT_REF_CTX_TYPE small
 
 
 
@@ -65,6 +65,9 @@ void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to );
 //   WARNING: This zeroes out the current data pool (and thus the most recently-
 //   generated fuzz_str_t stream).
 void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type );
+
+// Return the factory used by a gen ctx.
+fuzz_factory_t* Generator__get_context_factory( fuzz_gen_ctx_t* p_ctx );
 
 
 
