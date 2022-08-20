@@ -47,6 +47,8 @@ ListNode_t* List__drop_node( List_t* list, ListNode_t* node );
 
 // Get a list node using the specified property at the given offset of the given size and with the given value.
 ListNode_t* List__get_node( List_t* list, int node_property_offset, void* property_value, size_t property_size );
+// Get the node at the listed index from the head of the list.
+ListNode_t* List__get_index_from_head( List_t* p_list, size_t index );
 
 // Get placemarkers from the list from the heap.
 ListNode_t* List__get_head( List_t* list );

@@ -65,6 +65,7 @@ void List__clear( List_t* list ) {
 }
 
 // Reverse the order of a list.
+// TODO: Set the parm to List_t** and ret-type to void
 List_t* List__reverse( List_t* list ) {
     if ( NULL == list || List__get_count( list ) < 1 )  return NULL;
 
@@ -113,6 +114,21 @@ int List__index_of( List_t* list, void* node ) {
     }
 
     return -1;
+}
+
+
+// Get the node at the listed index.
+ListNode_t* List__get_index_from_head( List_t* p_list, size_t index ) {
+    if ( NULL == p_list )  return NULL;
+
+    ListNode_t* p_lhead = List__get_head( p_list );
+    for ( size_t i = 0; i < index; i++ ) {
+        if ( NULL == p_lhead )  return NULL;
+
+        p_lhead = p_lhead->next;
+    }
+
+    return p_lhead;
 }
 
 
