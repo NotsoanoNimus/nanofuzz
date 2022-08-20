@@ -59,7 +59,6 @@ struct _fuzz_ctx_t {
     size_t nest_level;
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
-    // Context-dependent list of varname-to-pattern-block associations.
 };
 
 
@@ -67,6 +66,8 @@ struct _fuzz_ctx_t {
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
+static inline void __branch_write_end( List_t* p_seq, fuzz_branch_root_t* p_branch_root );
+static size_t __search_branch_root_index( List_t* p_seq, fuzz_branch_root_t* p_branch_root );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards );
 
 
@@ -381,6 +382,35 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 break;
             }
 
+            case branch_root: {
+                // Get the different step-count possibilities.
+                fuzz_branch_root_t* p_step = (fuzz_branch_root_t*)(p->data);
+                size_t amount = p_step->amount;
+
+                // This should never happen -- there are always at least two conditions in an OR.
+                //if(amount <= 1 )
+                // Each step is a uint16_t, so 65535 max (5 chars), plus comma and space (2 chars) = 7
+                // The final amount is the string 'or XYZXY' (8 chars)
+                size_t len = ((FUZZ_MAX_STEPS-1)*7)+8+1;
+                char* p_steps = (char*)calloc( len, sizeof(char) );
+
+                for ( size_t x = 0; x < (amount-1); x++ )
+                    sprintf( (p_steps+strnlen(p_steps,len-8)), "%hu, ", p_step->steps[x] );
+
+                sprintf( (p_steps+strlen(p_steps)), "or %hu", p_step->steps[amount] );
+                *(p_steps+len-1) = '\0';   //paranoia
+
+                fprintf( fp_stream, "[BRANCH] Leap forward '%s' steps.\n", p_steps );
+                free( p_steps );
+                break;
+            }
+            case branch_jmp: {
+                // Jump label.
+                fprintf( fp_stream, "[BRANCH-END] Jump '%lu' steps ahead to exit branch.\n",
+                    *((size_t*)(p->data)) );
+                break;
+            }
+
             case end: {
                 fprintf( fp_stream, "!!! Stream end block (termination).\n" );
                 break;
@@ -427,7 +457,12 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     // If any sub-factories are attached, index their labels into the shard_idx.
     // NOTE: This also replicates the pointer to shard_idx into each child factory.
     // TODO: Cleanup, consolidate, and consider turning the primary hashtable into a single alloc
-    if ( NULL != p_ff->ref_shards && List__get_count( p_ff->ref_shards ) > 0 ) {
+    if (
+           NULL != p_ff
+        && NULL != p_ff->ref_shards
+        && List__get_count( p_ff->ref_shards ) > 0
+    ) {
+
         ListNode_t* p_shard = List__get_head( p_ff->ref_shards );
 
         size_t count = 0;
@@ -484,7 +519,7 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
 
 
 // Define a set of functional or syntactically special characters.
-static const char special_chars[] = "\\[{(<>)}]";
+static const char special_chars[] = "|\\[{(<>)}]";
 // Macro to register a fuzz error inside a fuzz_ctx (the pattern_parse func mainly).
 // TODO: get rid of useless error codes (might need them later for stats?)
 #define FUZZ_ERR_IN_CTX(errstr) { \
@@ -510,6 +545,12 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     const char* p_lvl0_sub;   // see the '<' section for variable declarations
     List_t* p_seq;
 
+    // Self-describing flags for branching mechanisms. TODO: ew
+    uint8_t is_branching = 0;
+    int branch_start_count = 0, branch_reentered = 0;
+
+    fuzz_branch_root_t* p_branch_root = NULL;
+
     len = strnlen( p_pattern, (FUZZ_MAX_PATTERN_LENGTH-1) );
     nest_level = p_ctx->nest_level;
 
@@ -520,7 +561,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     // Let's go!
 //printf( "Parsing %lu bytes of input.\n", len );
     for ( ; p < (p_pattern+len) && (*p); p++ ) {
-//printf( "READ: %02x\n", *p );
+printf( "READ: (%c) %02x\n", *p, *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
 //TODO: Spaghetti. Need to refactor quite a few things here once the application is operational.
@@ -551,6 +592,97 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 *((char*)(p_new_block->data)+1) = '\0';
 
                 p++;   //skips over the character being escaped since it's been handled
+                break;
+            }
+
+            // ********** BRANCHES (BOOLEAN OR) **********
+            case '|': {
+                //   Branches can come after most blocks, but they MUST come after something...
+                fuzz_pattern_block_t* p_prev = *((p_ctx->p_nest_tracker)+nest_level);
+                if ( NULL == p_prev ) {
+                    FUZZ_ERR_IN_CTX( "Branch mechanisms '|' must follow a valid string or other pattern" );
+                } else if ( branch_jmp == p_prev->type || branch_root == p_prev->type ) {
+                    FUZZ_ERR_IN_CTX( "Branch mechanisms '|' cannot be placed sequentially '||'" );
+                }
+
+                // Init the new block.
+                p_new_block = NEW_PATTERN_BLOCK;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+
+                // Branches in practice look similar to O|O|O|O where 'O' is a pattern block and
+                //   '|' is a branch. The block can also be a subsequence, a string of many blocks.
+                //   The nice thing about the logic of the branch is it DOES NOT NEST.
+                //   Even a pattern like: 'a|b|(1|(24)|3)|d|e' the lexer rolls the entire subseq (...)
+                //   up into a 'sub' block at the current nest level.
+                // Inserting a 'branch' block then makes memory look like:
+                //   |a.b.(|1.(24).3.)d.e+
+                //   Where '|' is the 'goto' pointing at the block to write, '.' is the 'jmp end', and
+                //   '+' is the 'end' position.
+                // A simple 'a|b' would become:  |a.b+
+
+                if ( 0 == is_branching ) {
+                    // A new branch is starting since the lexer was not currently branching
+                    p_branch_root = (fuzz_branch_root_t*)calloc( 1, sizeof(fuzz_branch_root_t) ); //new root
+                    p_new_block->data = p_branch_root;
+                    p_new_block->type = branch_root;
+
+                    // Drop the previous node from the sequence, insert the branch root, and replace the prev.
+                    List_t* p_new = List__new( FUZZ_MAX_PATTERN_LENGTH );
+
+                    // --- Iterate the list and get the previous node in it.
+                    // --- Remember that the nodes are read from most-recent to least.
+                    ListNode_t* p_x = List__get_head( p_seq );
+                    branch_start_count = 0;
+
+                    while ( NULL != p_x ) {
+                        List__add_node( p_new, p_x->node );
+
+                        if ( ((fuzz_pattern_block_t*)(p_x->node)) == p_prev )
+                            List__add_node( p_new, p_new_block );
+
+                        p_x = p_x->next;
+                    }
+
+                    // Destroy the old list (shallow).
+                    List__clear( p_seq );
+                    free( p_seq );
+
+                    // Get the index of the root and make sure it was inserted.
+                    branch_start_count = List__index_of( p_new, p_new_block );
+                    if ( branch_start_count < 0 ) {
+                        FUZZ_ERR_IN_CTX( "There was a problem initializing the new branch '|' mechanism" );
+                    }
+
+                    // Need to reverse because the above add process creates a reversed ll.
+                    p_seq = List__reverse( p_new );
+
+                    p_branch_root->amount = 0;   //first one's on the house :)
+                    p_branch_root->steps[0] = 1;
+
+                    // Init the new block.
+                    p_new_block = NEW_PATTERN_BLOCK;
+                    (p_new_block->count).single = 1;
+                    (p_new_block->count).base = 1;
+                }
+
+                // This is a middle-of-the-branch OR '|'
+                p_new_block->type = branch_jmp;
+                p_new_block->data = (size_t*)calloc( 1, sizeof(size_t) );   //filled retroactively later
+/*
+                // Increment and check.
+                (p_branch_root->amount)++;
+                if ( p_branch_root->amount > FUZZ_MAX_STEPS ) {
+                    FUZZ_ERR_IN_CTX( "Branches '|' cannot exceed the precompiled limit."
+                        " Consider simplifying your pattern" );
+                }
+
+                // Add the delta between the list count and the marker (+1 for this^ new block).
+                //   +2 for (1)this _jmp new block; (2) the 0-based index-of
+                size_t delta = (__search_branch_root_index( p_seq, p_branch_root ) + 2);
+                p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
+*/
+                is_branching = 3;
                 break;
             }
 
@@ -773,6 +905,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
             // ********** REPETITIONS **********
             case '{': {
                 // The current block ptr cannot be NULL.
+                // TODO: This shouldn't follow boolean-OR mechs
                 if ( NULL == *((p_ctx->p_nest_tracker)+nest_level) ) {
                     FUZZ_ERR_IN_CTX( "The repetition statement '{}' must follow a valid string or other pattern" )
                 }
@@ -880,8 +1013,18 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 free( p_sub );
 
                 // Make sure the returned list has some nodes. If not, problem.
-                if ( !p_pre || List__get_count( p_pre ) < 1 ) {
+                if ( NULL == p_pre || List__get_count( p_pre ) < 1 ) {
+                    if ( NULL != p_pre )  List__delete( p_pre );
                     FUZZ_ERR_IN_CTX( "Invalid, empty, or NULL branch inside Subsequence '()' statement" );
+                }
+                // Also ensure the returned list doesn't end with a branch. Remember, HEAD is last node.
+                ListNode_t* p_lhead = List__get_head( p_pre );
+                if ( NULL != p_lhead ) {
+                    fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(p_lhead->node);
+                    if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
+                        if ( NULL != p_pre )  List__delete( p_pre );
+                        FUZZ_ERR_IN_CTX( "Subsequence '()' statements cannot end with branch '|' mechanisms" );
+                    }
                 }
 
                 // At this point, essentially linearly staple the output of the sub in memory.
@@ -931,7 +1074,12 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // Rewind another character if there's more than 1 static str char; e.g. '123{8}45' vs. '1{4}'.
                 //   Effectively, the next iteration of the switch-case will parse this lone-dupe itself.
                 //   But if the static string that's incoming is only one character, this does it now.
-                if ( (p-start) > 0 && p < (p_pattern+len) && ('{' == *(p+1)) )  p--;
+                //   This must work similarly for the branch '|' operator.
+                if (
+                       (p-start) > 0
+                    && (p < (p_pattern+len))
+                    && ( ('{' == *(p+1)) || ('|' == *(p+1)) )
+                )  p--;
 
                 // Catalog the static string.
                 p_new_block = NEW_PATTERN_BLOCK;
@@ -942,13 +1090,55 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
 
+                // If a static character is hit at the end of a branch and its >1 char long,
+                //   snip the string and reset p. The '2==is_...' means this string is JUST AFTER
+                //   a branch '|' mechanism (next-in-line).
+                if ( strlen(z) > 1 && 2 == is_branching ) {
+                    char* x = (char*)calloc( 2, sizeof(char) );
+                    *x = *start; *(x+1) = '\0';
+                    p_new_block->data = x;
+                    free( z );
+                    p = start;
+                }
+
                 break;
             }
         }
 
         // Add the (maybe-)populated node onto the list and continue;
-        if ( p_new_block )
+        if ( p_new_block ) {
             List__add_node( p_seq, p_new_block );
+
+            // Branching logic to exit the branch when two consecutive non-branch blocks are used
+//            if ( 1 == is_branching || (branch_jmp != p_new_block->type
+//                && branch_root != p_new_block->type && 2 == is_branching) ) {
+            if ( 1 == is_branching || ('|' != *p && 2 == is_branching) ) {
+                // TODO: i hate this
+                __branch_reentry:
+
+                // Increment and check bound.
+                (p_branch_root->amount)++;
+                if ( p_branch_root->amount > FUZZ_MAX_STEPS ) {
+                    FUZZ_ERR_IN_CTX( "Branches '|' cannot exceed the precompiled limit."
+                        " Consider simplifying your pattern" );
+                }
+
+                // Search backwards (because ll HEAD is most recent pblock) till finding the root.
+                size_t delta = (
+                    __search_branch_root_index( p_seq, p_branch_root )
+                    - 1
+                    + (branch_reentered > 0)   // re-entries need an add'l
+                );
+                p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
+
+                // Go back and mark the branch jmp types with the proper distance from this node.
+                __branch_write_end( p_seq, p_branch_root );
+                if ( branch_reentered )  goto __branch_reentry_done;
+            }
+
+            // Only decrement the counter if it's set and a new node block was added.
+            if ( is_branching > 0 )  is_branching--;
+        }
 
         continue;
 
@@ -969,15 +1159,45 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
             return NULL;
     }
 
+    // If the code was still branching, make a RISKY jump back in to end it.
+    if ( is_branching > 0 ) {
+        branch_reentered = 1;
+        goto __branch_reentry;
+    }
+    __branch_reentry_done:
+    {} branch_reentered = 0; is_branching = 0;
+    // hate
+
     // Free this meta-tracker if it's still lingering.
     if ( NULL != p_lvl0_sub )
         free ( (void*)p_lvl0_sub );
+
+    // Also ensure the returned list doesn't end with a branch. Remember, HEAD is last node.
+    ListNode_t* p_lhead = List__get_head( p_seq );
+    if ( NULL != p_lhead ) {
+        fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(p_lhead->node);
+
+        if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
+            Error__add(
+                p_ctx->p_err,
+                p_ctx->nest_level,
+                (p-p_pattern),
+                FUZZ_ERROR_INVALID_SYNTAX,
+                "The input pattern cannot end with branch '|' mechanisms"
+             );
+
+            // Attempt to clean up.
+            fuzz_factory_t* x = __compress_List_to_factory( p_seq );
+            PatternFactory__delete( x );
+            return NULL;
+        }
+    }
 
     // Return the linked list representing the sequence of generation.
     if ( List__get_count( p_seq ) > 0 ) {
         return p_seq;
     } else {
-        List__delete( p_seq );
+        if ( NULL != p_seq )  List__delete( p_seq );
         return NULL;
     }
 }
@@ -1371,12 +1591,6 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
     // Set the amount. This should be it for the range.
     if ( amount <= 0 )  goto __range_parse_error;
     p_range->amount = amount;
-//printf( "+++ GOT '%lu' RANGES.\n", amount );
-/*for ( size_t i = 0; i < amount; i++ ) {
-    fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
-    if ( !p_shard )  continue;
-    printf( "-- SHARD: (%d) |%d|-|%d|\n", p_shard->single, p_shard->base, p_shard->high );
-}*/
 
     // Assign the range to the pattern block's data and return "OK".
     p_pattern_block->data = (void*)p_range;
@@ -1387,4 +1601,28 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
     __range_parse_error:
         if ( p_range )  free( (void*)p_range );
         return 0;
+}
+
+
+
+// Terminate the current branch and back-fill the jmp nodes.
+static inline void __branch_write_end( List_t* p_seq, fuzz_branch_root_t* p_branch_root ) {
+}
+
+
+// Find a branch root in a list (pointer hell).
+static size_t __search_branch_root_index( List_t* p_seq, fuzz_branch_root_t* p_branch_root ) {
+    if ( NULL == p_seq || NULL == p_branch_root )  return 0;
+
+    ListNode_t* p_lhead = List__get_head( p_seq );
+    while ( NULL != p_lhead ) {
+        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lhead->node);
+
+        if ( p_branch_root == p_block->data )
+            return List__index_of( p_seq, p_block );
+
+        p_lhead = p_lhead->next;
+    }
+
+    return 0;
 }

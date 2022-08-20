@@ -35,6 +35,11 @@ List_t* List__reverse( List_t* list );
 
 // Get the amount of nodes in the list.
 size_t List__get_count( List_t* list );
+// Get the maximum amount of nodes allowed for a given list.
+size_t List__get_max_count( List_t* list );
+
+// Get the position of a certain node with the set ptr.
+int List__index_of( List_t* list, void* node );
 
 // List node manipulation, adding and removal.
 bool List__add_node( List_t* list, void* node );

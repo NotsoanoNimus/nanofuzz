@@ -92,6 +92,30 @@ size_t List__get_count( List_t* list ) {
 }
 
 
+// Get the maximum amount of nodes allowed for the given linked list.
+size_t List__get_max_count( List_t* list ) {
+    return (NULL == list) ? 0 : list->max_size;
+}
+
+
+// Get the position of a certain node with the set ptr.
+int List__index_of( List_t* list, void* node ) {
+    if ( NULL == list || NULL == node )  return -1;
+
+    ListNode_t* p_lhead = List__get_head( list );
+    int idx = 0;
+
+    while ( NULL != p_lhead ) {
+        if ( node == p_lhead->node )  return idx;
+
+        p_lhead = p_lhead->next;
+        idx++;
+    }
+
+    return -1;
+}
+
+
 // Add an entry onto the end of a linked-list.
 bool List__add_node( List_t* list, void* node ) {
     if ( NULL == list || NULL == node )  return false;

@@ -24,6 +24,8 @@
 #define FUZZ_MAX_PATTERN_RANGE_FRAGMENTS 16
 // Max amount of ref shards allowed per fuzz_factory_t context.
 #define FUZZ_MAX_VARIABLES 16
+// Max amount of different conditions which can be OR'd together with the '|' mechanism.
+#define FUZZ_MAX_STEPS 32
 
 
 
@@ -35,6 +37,8 @@ typedef enum _pattern_block_type {
     range,
     sub,
     ret,
+    branch_root,
+    branch_jmp,
     end
 } pattern_block_type;
 
@@ -79,6 +83,12 @@ typedef struct _fuzz_range_t {
     fuzz_repetition_t fragments[FUZZ_MAX_PATTERN_RANGE_FRAGMENTS];
     size_t amount;
 } __attribute__((__packed__)) fuzz_range_t;
+
+// Used in branch ROOT mechanisms to elect a forward-path in the node sequence.
+typedef struct _fuzz_branch_root_t {
+    unsigned short steps[FUZZ_MAX_STEPS];   // the different forward-step counts available
+    size_t amount;   // how many steps are defined to choose from
+} __attribute__((__packed__)) fuzz_branch_root_t;
 
 // A block (or "piece") of an interpreted part of the input pattern information.
 typedef struct _fuzz_pattern_block_t {
