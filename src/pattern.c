@@ -55,6 +55,7 @@ struct _fuzz_ctx_t {
     // Tracks an overall context's nesting hierarchy; entry points for each layer as it builds.
     //   These values are intended to be ephemeral pointers used just while building the factory.
     fuzz_pattern_block_t** p_nest_tracker;
+    fuzz_pattern_block_t** pp_branch_save;   //special 2xptr to save branching states when needed.
     // Tracks the index into the above, preventing over-complexity of input patterns.
     size_t nest_level;
     // Context-dependent pattern error handler.
@@ -122,6 +123,8 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
 
     p_ctx->p_nest_tracker = (fuzz_pattern_block_t**)calloc(
         FUZZ_MAX_NESTING_COMPLEXITY, sizeof(fuzz_pattern_block_t*) );
+    p_ctx->pp_branch_save = (fuzz_pattern_block_t**)calloc(
+        FUZZ_MAX_NESTING_COMPLEXITY, sizeof(fuzz_pattern_block_t*) );
     p_ctx->nest_level = 0;
     p_ctx->p_err = Error__new();
 
@@ -132,6 +135,7 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
 static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
     if ( p ) {
         if ( p->p_nest_tracker )  free( p->p_nest_tracker );
+        if ( p->pp_branch_save )  free( p->pp_branch_save );
 
         if (  p->p_err && 0 == Error__has_error( p->p_err )  ) {
             Error__delete( p->p_err );
@@ -397,7 +401,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 for ( size_t x = 0; x < (amount-1); x++ )
                     sprintf( (p_steps+strnlen(p_steps,len-8)), "%hu, ", p_step->steps[x] );
 
-                sprintf( (p_steps+strlen(p_steps)), "or %hu", p_step->steps[amount] );
+                sprintf( (p_steps+strlen(p_steps)), "or %hu", p_step->steps[amount-1] );
                 *(p_steps+len-1) = '\0';   //paranoia
 
                 fprintf( fp_stream, "[BRANCH] Leap forward '%s' steps.\n", p_steps );
@@ -609,6 +613,8 @@ printf( "READ: (%c) %02x\n", *p, *p );
                 p_new_block = NEW_PATTERN_BLOCK;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
+                uint8_t init = (0 == is_branching);
 
                 // Branches in practice look similar to O|O|O|O where 'O' is a pattern block and
                 //   '|' is a branch. The block can also be a subsequence, a string of many blocks.
@@ -657,13 +663,14 @@ printf( "READ: (%c) %02x\n", *p, *p );
                     // Need to reverse because the above add process creates a reversed ll.
                     p_seq = List__reverse( p_new );
 
-                    p_branch_root->amount = 0;   //first one's on the house :)
-                    p_branch_root->steps[0] = 1;
+//                    p_branch_root->amount = 0;   //first one's on the house :)
+//                    p_branch_root->steps[0] = 1;
 
                     // Init the new block.
                     p_new_block = NEW_PATTERN_BLOCK;
                     (p_new_block->count).single = 1;
                     (p_new_block->count).base = 1;
+                    (p_new_block->count).high = 1;
                 }
 
                 // This is a middle-of-the-branch OR '|'
@@ -682,7 +689,7 @@ printf( "READ: (%c) %02x\n", *p, *p );
                 size_t delta = (__search_branch_root_index( p_seq, p_branch_root ) + 2);
                 p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
 */
-                is_branching = 3;
+                is_branching = 3 + init;
                 break;
             }
 
@@ -1105,16 +1112,44 @@ printf( "READ: (%c) %02x\n", *p, *p );
             }
         }
 
+        // Always save the current nest level's node pointer for branching on lvl 2.
+        //   In case the coming iteration drops the is_branching monitor to 1, the previous
+        //   (even if a sub) can be easily referenced.
+        if ( is_branching == 2 )
+            *((p_ctx->pp_branch_save)+nest_level) = *((p_ctx->p_nest_tracker)+nest_level);
+
         // Add the (maybe-)populated node onto the list and continue;
         if ( p_new_block ) {
             List__add_node( p_seq, p_new_block );
 
-            // Branching logic to exit the branch when two consecutive non-branch blocks are used
-//            if ( 1 == is_branching || (branch_jmp != p_new_block->type
-//                && branch_root != p_new_block->type && 2 == is_branching) ) {
-            if ( 1 == is_branching || ('|' != *p && 2 == is_branching) ) {
+            // Branching logic to close the branch when two consecutive non-branch blocks are used,
+            //   or to append more branch conditions when this block immediately follows a pipe.
+            if ( branch_jmp == p_new_block->type || 1 == is_branching ) {
+//if ( 4 l== is_branching || 2 == is_branching ) {
+printf("BRANCH '%d'\n", is_branching );
+                if ( 4 == is_branching )  is_branching--;
                 // TODO: i hate this
-                __branch_reentry:
+                __branch_reentry: {}
+
+                // Search backwards (because ll HEAD is most recent pblock) till finding the root.
+                // --- If the most recent type is a sub, we MUST subtract its index from the root
+                //      to get its actual delta position.
+                fuzz_pattern_block_t* p_curr = *((p_ctx->p_nest_tracker)+nest_level);
+                if ( 1 == is_branching && NULL != *((p_ctx->pp_branch_save)+nest_level) ) {
+                    p_curr = *((p_ctx->pp_branch_save)+nest_level);
+                }
+
+                // death by logic -- TODO TODO TODO TODO
+                size_t delta = (
+                    __search_branch_root_index( p_seq, p_branch_root )
+                    - (
+                        (sub == p_curr->type || sub == p_new_block->type)
+                        * (List__index_of( p_seq, p_curr ) - (0 == nest_level))
+                    )
+                    - (sub != p_curr->type)
+                );
+
+                p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
 
                 // Increment and check bound.
                 (p_branch_root->amount)++;
@@ -1123,16 +1158,13 @@ printf( "READ: (%c) %02x\n", *p, *p );
                         " Consider simplifying your pattern" );
                 }
 
-                // Search backwards (because ll HEAD is most recent pblock) till finding the root.
-                size_t delta = (
-                    __search_branch_root_index( p_seq, p_branch_root )
-                    - 1
-                    + (branch_reentered > 0)   // re-entries need an add'l
-                );
-                p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
-
+printf( "PPPPPP (%d) (%d) (%d) (%lu) (%d) (%lu) ==> (%lu,%hu)\n", p_curr->type, p_curr->count.base, p_curr->count.high,
+__search_branch_root_index( p_seq, p_branch_root ),List__index_of(p_seq,p_curr), p_branch_root->amount, delta,
+p_branch_root->steps[p_branch_root->amount] );
+if(string == p_curr->type) printf("STR:'%s'\n",(char*)(p_curr->data));
                 // Go back and mark the branch jmp types with the proper distance from this node.
                 __branch_write_end( p_seq, p_branch_root );
+
                 if ( branch_reentered )  goto __branch_reentry_done;
             }
 

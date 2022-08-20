@@ -260,7 +260,7 @@ int main( int argc, char* const argv[] ) {
         exit( 1 );
     } else {
         // Explain the factory.
-debug__print_hex( "SHARD INDEX", PatternFactory__get_shard_index_ptr(p_pattern_factory), FUZZ_MAX_VARIABLES*(sizeof(unsigned long)+sizeof(void*)) );
+//debug__print_hex( "SHARD INDEX", PatternFactory__get_shard_index_ptr(p_pattern_factory), FUZZ_MAX_VARIABLES*(sizeof(unsigned long)+sizeof(void*)) );
         PatternFactory__explain( stdout, p_pattern_factory );
         // TEST CODE //
 /*
