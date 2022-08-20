@@ -163,9 +163,15 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     //   and clear to JUST that??
     memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
-    // Let's do it
+    // Let's do it, but play nicely.
 //printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
-    while ( pip && end != pip->type ) {
+    void* p_instruction_limit =
+        (void*)pip + (
+            PatternFactory__get_count( p_ctx->p_factory )
+            * PatternFactory__sizeof()
+        )
+    ;
+    while ( pip && end != pip->type && (void*)pip < p_instruction_limit ) {
         if ( NULL == pip )  return NULL;   // TODO: should this be here?
 
         // If the current state has a nullified pointer set and the type isn't a ret or sub, keep moving.
@@ -385,6 +391,31 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 //printf( "Step out to %lu\n", *lvl);
                     pip++;
                 }
+                break;
+            }
+
+            case branch_root : {
+                // Randomly select one of the available branches from the structure.
+                fuzz_branch_root_t* p_root = (fuzz_branch_root_t*)(pip->data);
+
+                // If for some reason the root is null, proceed to the next instruction
+                //   so the branch falls back to the first choice on error.
+                if ( NULL == p_root ) {
+                    pip++;
+                    break;
+                }
+
+                // Get the random index into the steps table and select it.
+                size_t select = xoroshiro__get_bounded( p_ctx->p_prng, 0, p_root->amount );
+
+                unsigned short incr = p_root->steps[select];
+                pip += (incr ? incr : 1);   //always move by at least 1
+                break;
+            }
+            case branch_jmp : {
+                // Blindly follow the jump, moving the pseudo instruction ptr (PIP) forward.
+                size_t jmp = *((size_t*)(pip->data));
+                pip += (jmp ? jmp : 1);   //by at least 1 so it doesn't get stuck
                 break;
             }
 

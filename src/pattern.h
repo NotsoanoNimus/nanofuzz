@@ -104,6 +104,8 @@ typedef struct _fuzz_pattern_block_t {
 
 
 
+// Return the private size of the fuzz factory structure.
+size_t PatternFactory__sizeof(void);
 // Get the blob data from the given fuzz factory struct.
 void* PatternFactory__get_data( fuzz_factory_t* p_fact );
 // Get the size of the data pool for a given factory.
