@@ -66,7 +66,8 @@ struct _fuzz_ctx_t {
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
-static int __branch_write_end( List_t** pp_seq, fuzz_branch_root_t* p_branch_root );
+static int __branch_write_end( List_t** pp_seq, fuzz_branch_root_t* p_branch_root,
+    struct _fuzz_ctx_t* const p_ctx );
 static size_t __search_branch_root_index( List_t** pp_seq, fuzz_branch_root_t* p_branch_root );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards );
 
@@ -988,6 +989,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                 p_new_block->type = sub;
 
+                // Set the content of the sub's data to the length of its members.
                 size_t* p_lvl = (size_t*)calloc( 1, sizeof(size_t) );
                 *p_lvl = nest_level;
                 p_new_block->data = p_lvl;
@@ -1114,6 +1116,8 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // Increment and check bound.
                 (p_branch_root->amount)++;
                 if ( p_branch_root->amount > FUZZ_MAX_STEPS ) {
+                    ListNode_t* x = List__drop_node(  p_seq, List__get_head( p_seq )  );
+                    if ( x )  free( x );
                     FUZZ_ERR_IN_CTX( "Branches '|' cannot exceed the precompiled limit."
                         " Consider simplifying your pattern" );
                 }
@@ -1134,16 +1138,16 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                         * List__index_of( p_seq, p_curr )
                     )
                 );
-/*size_t delta = __search_branch_root_index( &p_seq, p_branch_root ) - 1 - (
-                        (NULL != p_curr && sub == p_curr->type)
-                        * List__index_of( p_seq, p_curr )
-                    );
-*/
                 p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
 
             } else if ( 1 == is_branching ) {
                 // Go back and mark the branch jmp types with the proper distance from this node.
-                if (  !__branch_write_end( &p_seq, p_branch_root )  ) {
+                if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx )  ) {
+                    p_seq = List__reverse( p_seq );   //the inner method reverses
+
+                    ListNode_t* x = List__drop_node(  p_seq, List__get_head( p_seq )  );
+                    if ( x )  free( x );
+
                     FUZZ_ERR_IN_CTX( "Problem closing branch '|' mechanism" );
                 }
 
@@ -1178,7 +1182,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     //   it will become '1', which doesn't give the opportunity for the 'else-if'
     //   above to run for that branch.
     if ( is_branching > 0 ) {
-        if (  !__branch_write_end( &p_seq, p_branch_root )  ) {
+        if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx )  ) {
             Error__add(
                 p_ctx->p_err,
                 p_ctx->nest_level,
@@ -1633,19 +1637,60 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
 
 
 // Terminate the current branch and back-fill the jmp nodes.
-static int __branch_write_end( List_t** pp_seq, fuzz_branch_root_t* p_branch_root ) {
-    size_t idx = __search_branch_root_index( pp_seq, p_branch_root );
-printf( "ENDING BRANCH (MYPOS |%lu|) (IDX |%lu|)\n", List__get_count( *pp_seq ), idx );
+static int __branch_write_end(
+    List_t** pp_seq,
+    fuzz_branch_root_t* p_branch_root,
+    struct _fuzz_ctx_t* const p_ctx
+) {
+//printf( "NLVL (%lu) / PCTX (%d)\n", (p_ctx ? p_ctx->nest_level : -1), (NULL != p_ctx) );
+    *pp_seq = List__reverse( *pp_seq );
 
-    // First get the arraylist node for the branch_root.
-    ListNode_t* p_lroot = List__get_index_from_head(
-        *pp_seq,
-        (  List__get_count( *pp_seq ) - (1 + idx)  )
-    );
+    ListNode_t* p_lroot = List__get_head( *pp_seq );
+    while ( NULL != p_lroot ) {
+        if ( NULL != p_lroot->node )
+            if ( p_branch_root == ((fuzz_pattern_block_t*)(p_lroot->node))->data )
+                break;
+
+        p_lroot = p_lroot->next;
+    }
+
     if ( NULL == p_lroot
         || branch_root != ((fuzz_pattern_block_t*)(p_lroot->node))->type
     )  return 0;
 
+    ListNode_t* p_ltmp = p_lroot->next;
+    size_t dist_to_end = 0;
+
+    fuzz_pattern_block_t* p_prev = p_ctx
+        ? *((p_ctx->p_nest_tracker)+(p_ctx->nest_level))
+        : NULL;
+    void* p_lend = ( p_prev && sub == p_prev->type ) ? p_prev : NULL;
+//printf("--- |%p|\n", p_lend);
+
+    while ( NULL != p_ltmp && p_lend != p_ltmp->node ) {
+        dist_to_end++;
+        p_ltmp = p_ltmp->next;
+    }
+//printf("--- DIST |%lu|\n", dist_to_end);
+
+    for ( size_t i = 1; i <= p_branch_root->amount; i++ ) {
+        ListNode_t* p_lnode = p_lroot;
+
+        unsigned short move =  p_branch_root->steps[i] - 1;
+        for ( size_t t = move; t; t-- )  p_lnode = p_lnode->next;
+
+        // If the block is a JMP, set its jmp size; else, error.
+        //   If the jmp is inside a sub, account for the ending appended 'ret'.
+        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lnode->node);
+        if ( branch_jmp == p_block->type ) {
+            *((size_t*)(p_block->data)) = (dist_to_end - move);
+        } else  return 0;
+    }
+
+    *pp_seq = List__reverse( *pp_seq );
+    return 1;
+
+/*
     // Go from the root index to each of its member steps, back up by 1, and assign
     //   jmp distance. We blindly trust the values inside the branch root's steps.
     // There is always more than 1 step, we always want to start on the SECOND one.
@@ -1673,15 +1718,17 @@ printf( "--- WOULD MOVE |%lu|\n", jmp_count );
         );
 
         // If the block is a JMP, set its jmp size; else, error.
+        //   If the jmp is inside a sub, account for the ending appended 'ret'.
         fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_ljmp->node);
         if ( branch_jmp == p_block->type ) {
-            *((size_t*)(p_block->data)) = jmp_count;
+            *((size_t*)(p_block->data)) = jmp_count + (0 != p_ctx->nest_level);
         } else  return 0;
 
     }
 
     // OK
     return 1;
+*/
 }
 
 

@@ -112,8 +112,9 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     );
 
     // Allocate initial state vector values.
-    for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ )
+    for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ ) {
         *(((x->state).counter)+o) = (counter_t*)calloc( 1, sizeof(counter_t) );
+    }
     (x->state).nest_level = 0;
     (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
 
