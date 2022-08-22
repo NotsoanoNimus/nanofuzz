@@ -1643,21 +1643,34 @@ static int __branch_write_end(
     struct _fuzz_ctx_t* const p_ctx
 ) {
 //printf( "NLVL (%lu) / PCTX (%d)\n", (p_ctx ? p_ctx->nest_level : -1), (NULL != p_ctx) );
+    // Reverse the input list so that when iterating from the list head to tail,
+    //   the branch root is encountered first before its jmps.
     *pp_seq = List__reverse( *pp_seq );
 
+    // Start from the base of the list and seek the branch_root target.
     ListNode_t* p_lroot = List__get_head( *pp_seq );
     while ( NULL != p_lroot ) {
-        if ( NULL != p_lroot->node )
-            if ( p_branch_root == ((fuzz_pattern_block_t*)(p_lroot->node))->data )
+        if ( NULL != p_lroot->node ) {
+            if ( p_branch_root == ((fuzz_pattern_block_t*)(p_lroot->node))->data ) {
                 break;
-
+            }
+        }
         p_lroot = p_lroot->next;
     }
 
-    if ( NULL == p_lroot
+    // If the node (somehow) wasn't found, or the found node isn't a root, fail.
+    if (
+           NULL == p_lroot
         || branch_root != ((fuzz_pattern_block_t*)(p_lroot->node))->type
     )  return 0;
 
+    // Now need to seek the distance up to one of two points:
+    //   1. The end of the linked list of pattern blocks (up to the most recent instruction).
+    //   2. If the most recent node that's closing the branch (remember: this is the END of
+    //       a branch statement, so 1 == is_branching) is a 'sub' pattern block type, the
+    //       distance to the 'end' starts at the BEGINNING of the sub, not the ending 'ret'
+    //       after the recursion appends all the sub-items.
+    //         EX: a|b|c(defg) --> |a.b.c+ rather than |a.b.c(defg[ret]+
     ListNode_t* p_ltmp = p_lroot->next;
     size_t dist_to_end = 0;
 
@@ -1667,12 +1680,15 @@ static int __branch_write_end(
     void* p_lend = ( p_prev && sub == p_prev->type ) ? p_prev : NULL;
 //printf("--- |%p|\n", p_lend);
 
+    // Seek the distance per the above comment.
     while ( NULL != p_ltmp && p_lend != p_ltmp->node ) {
         dist_to_end++;
         p_ltmp = p_ltmp->next;
     }
 //printf("--- DIST |%lu|\n", dist_to_end);
 
+    // Automatically skip index 0 (the implicit '1' branch) and for each branch, slide
+    //   up to the branch location, minus 1, to land on the branch_jmp.
     for ( size_t i = 1; i <= p_branch_root->amount; i++ ) {
         ListNode_t* p_lnode = p_lroot;
 
@@ -1680,55 +1696,17 @@ static int __branch_write_end(
         for ( size_t t = move; t; t-- )  p_lnode = p_lnode->next;
 
         // If the block is a JMP, set its jmp size; else, error.
-        //   If the jmp is inside a sub, account for the ending appended 'ret'.
+        //   The jmp size depends on the difference between the current location from
+        //   root ('move') and the distance to the end of the list in its current state.
         fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lnode->node);
         if ( branch_jmp == p_block->type ) {
             *((size_t*)(p_block->data)) = (dist_to_end - move);
         } else  return 0;
     }
 
+    // OK. Reorient the linked list and return success.
     *pp_seq = List__reverse( *pp_seq );
     return 1;
-
-/*
-    // Go from the root index to each of its member steps, back up by 1, and assign
-    //   jmp distance. We blindly trust the values inside the branch root's steps.
-    // There is always more than 1 step, we always want to start on the SECOND one.
-    //   NOTE: Remember that 'amount' is a 0-based counter.
-    // jmp_count = COUNT(list) - IDX(root) - move
-    for ( size_t i = 1; i <= p_branch_root->amount; i++ ) {
-
-        unsigned short move =  p_branch_root->steps[i] - 1;
-printf("--- STEPS-1 |%hu|\n", move );
-
-        // Slide from the head node to the index of the 'root', minus the 'move' value.
-        // HEAD(0) [1] [2] [3] [JMP] [5] [ROOT(5,3)] [7]
-        //                       ^
-        //                       `-- = (8 - (1 + 1) - (3steps-1)) ==> 4
-        // HEAD(0) [1] [2] [JMP1] [4] [JMP2] [6] [7] [8] [9] [JMP3] [11] [ROOT(11,9,4,2)] [13] [14]
-        //   JMP1 = (15 - (1 + 2) - (10steps-1)) ==> 3 ==> JUMP 3 STEPS TO GET TO HEAD (node 0)
-        //   JMP2 = (15 - (1 + 2) - (8 steps-1)) ==> 5
-        //   JMP3 = (15 - (1 + 2) - (3 steps-1)) ==> 10
-        size_t jmp_count = List__get_count( *pp_seq ) - (1 + idx) - move;
-printf( "--- WOULD MOVE |%lu|\n", jmp_count );
-
-        ListNode_t* p_ljmp = List__get_index_from_head(
-            *pp_seq,
-            jmp_count
-        );
-
-        // If the block is a JMP, set its jmp size; else, error.
-        //   If the jmp is inside a sub, account for the ending appended 'ret'.
-        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_ljmp->node);
-        if ( branch_jmp == p_block->type ) {
-            *((size_t*)(p_block->data)) = jmp_count + (0 != p_ctx->nest_level);
-        } else  return 0;
-
-    }
-
-    // OK
-    return 1;
-*/
 }
 
 

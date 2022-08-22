@@ -286,14 +286,14 @@ int main( int argc, char* const argv[] ) {
     if ( amount_to_generate ) {
         for ( size_t t = 0; t < amount_to_generate; t++ ) {
             fuzz_str_t* p_str = Generator__get_next( p_genctx );
-            printf(  "FUZZ: %s\n", (const char*)(p_str->output)  );
+            printf(  "FUZZ: %s\n\n", (const char*)(p_str->output)  );
             free( (void*)p_str->output ); free( p_str );
         }
     } else {
         for ( ; ; ) {
             fuzz_str_t* const p_str = Generator__get_next( p_genctx );
             Generator__get_next( p_genctx );
-            printf( "FUZZ: %s\n", (const char*)(p_str->output) );
+            printf( "FUZZ: %s\n\n", (const char*)(p_str->output) );
             free( (void*)p_str->output ); free( p_str );
         }
     }
