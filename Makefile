@@ -2,6 +2,8 @@ CC=gcc
 COMMONFLAGS=-g -Wall
 CFLAGS=$(COMMONFLAGS) -DDEBUG
 
+PROJNAME=nanofuzz
+
 SRC=src
 SRCS=$(wildcard $(SRC)/*.c)
 
@@ -9,16 +11,32 @@ OBJ=obj
 OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(SRCS))
 
 BINDIR=bin
-BIN=$(BINDIR)/nanofuzz
+BIN=$(BINDIR)/$(PROJNAME)
+
+LIB=lib
+SLIBOUT=$(LIB)/lib$(PROJNAME).a
+DLIBOUT=$(LIB)/lib$(PROJNAME).so
 
 TEST=tests
 TESTS=$(wildcard $(TEST)/*.c)
-TESTOBJS=$(patsubst $(TEST)/%.c, $(TEST)/obj/%.o, $(TESTS))
-TESTBINS=$(patsubst $(TEST)/%.c, $(TEST)/bin/%, $(TESTS))
+TESTOBJ=$(TEST)/obj
+TESTBIN=$(TEST)/bin
+TESTOBJS=$(patsubst $(TEST)/%.c, $(TESTOBJ)/%.o, $(TESTS))
+TESTBINS=$(patsubst $(TEST)/%.c, $(TESTBIN)/%, $(TESTS))
 
 
 # By default, don't run tests. Just build the application.
 all: $(BIN)
+
+
+# Static library file for testing. Excludes the main.o object.
+slib: $(SLIBOUT)
+
+$(LIB):
+	-mkdir $(LIB)
+
+$(SLIBOUT): $(LIB) $(OBJ) $(OBJS)
+	ar rcs $(SLIBOUT) $$(echo -n "$(OBJS)" | sed 's/$(OBJ)\/main.o//')
 
 
 # Release build is intended the be 'optimized' and tested thoroughly.
@@ -27,10 +45,11 @@ release: clean
 release: tests
 
 
-# Clean structure.
+# Clean structures.
 clean:
-	-rm -r $(BINDIR)/* $(OBJ)/*
-	-rm -r $(TEST)/bin $(TEST)/obj
+	-rm -r $(BINDIR) $(OBJ)
+	-rm -r $(TESTBIN) $(TESTOBJ)
+	-rm -r $(LIB)
 
 
 # Create the actual CLI executable.
@@ -49,18 +68,20 @@ $(BIN): $(OBJ) $(BINDIR) $(OBJS)
 
 
 # TEST CASES. Creates the necessary folder structure for Criterion tests, and run them.
-tests:CFLAGS=-L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS)
-tests: all $(TEST)/obj $(TEST)/bin $(TESTBINS)
+.PHONY: tests
+tests:CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS)
+tests: all slib $(TESTOBJ) $(TESTBIN) $(TESTBINS)
 	for x in $(TESTBINS) ; do ./$$x ; done
+	./$(TEST)/compliance.py 50
 
-$(TEST)/obj:
-	-mkdir $(TEST)/obj
+$(TESTOBJ):
+	-mkdir $(TESTOBJ)
 
-$(TEST)/bin:
-	-mkdir $(TEST)/bin
+$(TESTBIN):
+	-mkdir $(TESTBIN)
 
-$(TEST)/obj/%.o: $(TEST)/%.c
+$(TESTOBJ)/%.o: $(TEST)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TEST)/bin/%: $(TESTOBJS)
-	$(CC) $(CFLAGS) $(TESTOBJS) -o $@ -lcriterion
+$(TESTBIN)/%: $(TESTOBJS)
+	$(CC) $(CFLAGS) $(TESTOBJS) -o $@ -l$(PROJNAME) -lcriterion
