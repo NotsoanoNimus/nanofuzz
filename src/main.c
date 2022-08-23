@@ -20,8 +20,8 @@
 #include <linux/limits.h>
 
 #include "api.h"
-#include "pattern.h"
-#include "generator.h"
+//#include "pattern.h"
+//#include "generator.h"
 
 
 
@@ -252,16 +252,17 @@ int main( int argc, char* const argv[] ) {
     // Create a new error context to read problems from the pattern string, if any.
     fuzz_error_t* p_err_ctx = NULL;
 
-    // Parse it and generate a pattern factory in the background.
-    fuzz_factory_t* p_pattern_factory = PatternFactory__new( p_pattern_contents, &p_err_ctx );
-    if ( NULL == p_pattern_factory ) {
+    // Parse the input pattern and init a fuzzer context.
+    nanofuzz_context_t* p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_err_ctx );
+    if ( NULL == p_fuzz_ctx ) {
         Error__print( p_err_ctx, stderr );
         free( p_pattern_contents );
         exit( 1 );
     } else {
         // Explain the factory.
 //debug__print_hex( "SHARD INDEX", PatternFactory__get_shard_index_ptr(p_pattern_factory), FUZZ_MAX_VARIABLES*(sizeof(unsigned long)+sizeof(void*)) );
-        PatternFactory__explain( stdout, p_pattern_factory );
+//        PatternFactory__explain( stdout, p_pattern_factory );
+        Nanofuzz__PatternFactory__explain( stdout, p_fuzz_ctx );
         // TEST CODE //
 /*
         printf( "Data size: %lu (%lu)\n",
@@ -281,28 +282,30 @@ int main( int argc, char* const argv[] ) {
 
     // TEST CODE //
 //    printf( "Generating '%lu' values. OK\n", amount_to_generate );
-    fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory, normal );
+//    fuzz_gen_ctx_t* p_genctx = Generator__new_context( p_pattern_factory, normal );
 
     if ( amount_to_generate ) {
         for ( size_t t = 0; t < amount_to_generate; t++ ) {
-            fuzz_str_t* p_str = Generator__get_next( p_genctx );
-            printf(  "FUZZ: %s\n\n", (const char*)(p_str->output)  );
-            free( (void*)p_str->output ); free( p_str );
+            nanofuzz_data_t* p_data = Nanofuzz__get_next( p_fuzz_ctx );
+            if ( p_data )  printf(  "FUZZ: %s\n\n", (const char*)(p_data->output)  );
+            Nanofuzz__delete_data( p_data );
+//            free( (void*)p_str->output ); free( p_str );
         }
     } else {
         for ( ; ; ) {
-            fuzz_str_t* const p_str = Generator__get_next( p_genctx );
-            Generator__get_next( p_genctx );
-            printf( "FUZZ: %s\n\n", (const char*)(p_str->output) );
-            free( (void*)p_str->output ); free( p_str );
+            nanofuzz_data_t* const p_data = Nanofuzz__get_next( p_fuzz_ctx );
+            if ( p_data )  printf(  "FUZZ: %s\n\n", (const char*)(p_data->output)  );
+            Nanofuzz__delete_data( p_data );
+//            free( (void*)p_str->output ); free( p_str );
         }
     }
     ///////////////
 
 
     // Free resource allocations. All done.
+    Nanofuzz__delete( p_fuzz_ctx );
     free( p_pattern_contents );
-    Generator__delete_context( p_genctx );
+//    Generator__delete_context( p_genctx );
 //    PatternFactory__delete( p_pattern_factory );
 }
 

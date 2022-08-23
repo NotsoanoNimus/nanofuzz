@@ -23,6 +23,7 @@ TESTOBJ=$(TEST)/obj
 TESTBIN=$(TEST)/bin
 TESTOBJS=$(patsubst $(TEST)/%.c, $(TESTOBJ)/%.o, $(TESTS))
 TESTBINS=$(patsubst $(TEST)/%.c, $(TESTBIN)/%, $(TESTS))
+TEST_COMPLIANCE=$(TEST)/compliance.py
 
 
 # By default, don't run tests. Just build the application.
@@ -72,7 +73,8 @@ $(BIN): $(OBJ) $(BINDIR) $(OBJS)
 tests:CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS)
 tests: all slib $(TESTOBJ) $(TESTBIN) $(TESTBINS)
 	for x in $(TESTBINS) ; do ./$$x ; done
-	./$(TEST)/compliance.py 50
+	if [ ! -x $(TEST_COMPLIANCE) ]; then chmod +x $(TEST_COMPLIANCE); fi
+	$(TEST_COMPLIANCE) 50
 
 $(TESTOBJ):
 	-mkdir $(TESTOBJ)

@@ -50,14 +50,21 @@ static inline uint64_t __xoroshiro256p__next( xoroshiro256p_state_t* p_state ) {
 
 
 
-xoroshiro256p_state_t* xoroshiro__new( uint64_t seed_value ) {
+xoroshiro256p_state_t* xoroshiro__new() {
     // Seed the four values in the xoroshiro state with a single 64-bit integer,
     //   which seeds a tinyMT64, which helps start the state of the vector.
     int i;
+    uint64_t seed_value;
+    unsigned int lo, hi;
     tinymt64_t* p_prng_init;
     xoroshiro256p_state_t* state;
 
     state = (xoroshiro256p_state_t*)calloc( 1, sizeof(xoroshiro256p_state_t) );
+
+    // Get the amount of pseudo-cycles since the processor was powered on.
+    //   This should act as a sufficient non-time-based PRNG seed.
+    __asm__ __volatile__ (  "rdtsc" : "=a" (lo), "=d" (hi)  );
+    seed_value = ( ((uint64_t)hi << 32) | lo );
 
     p_prng_init = (tinymt64_t*)calloc( 1, sizeof(tinymt64_t) );
     tinymt64_init( p_prng_init, seed_value );
@@ -67,7 +74,11 @@ xoroshiro256p_state_t* xoroshiro__new( uint64_t seed_value ) {
 
     free( p_prng_init );
 
-    __xoroshiro256p__next( state );
+    // Shuffle the state contents a random amount of times, based on the 3rd state item
+    //   from the Mersenne Twister. This is an attempt to better init the state vector.
+    for ( uint16_t x = (state->s[2]).as[1]; x > 0; x-- )
+        __xoroshiro256p__next( state );
+
     return state;
 }
 

@@ -24,3 +24,5 @@
 #   reserved for a 'make' call of its own, perhaps in the 'make release' path.
 #
 #
+
+print( "========== NANOFUZZ COMPLIANCE TESTING ==========\n" )

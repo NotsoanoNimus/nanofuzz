@@ -101,7 +101,7 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     x->type = type;
     x->p_factory = p_factory;
-    x->p_prng = xoroshiro__new( time(NULL) );
+    x->p_prng = xoroshiro__new();
     x->p_most_recent = NULL;
     x->p_data_pool = (unsigned char*)calloc( 1,
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
@@ -474,8 +474,6 @@ void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to ) {
 
 
 // Resize a generator's data pool to the new ctx type.
-//   WARNING: This zeroes out the current data pool (and thus the most recently-
-//   generated fuzz_str_t stream).
 void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
     if ( !p_ctx )  return;
 
