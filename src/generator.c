@@ -19,9 +19,9 @@
 typedef struct _fuzz_generator_counter_t {
     unsigned short how_many;   // how many (chosen randomly within range)
     unsigned short generated;   // count of items already iterated/generated
-    void* p_goto;   // the pointer to reference when iterating
-    // ^ it doesn't matter if this points to a sub or a string, the type controls
-    //   exactly what is done with it
+//    void* p_goto;   // the pointer to reference when iterating
+//    // ^ it doesn't matter if this points to a sub or a string, the type controls
+//    //   exactly what is done with it
 } __attribute__((__packed__)) counter_t;
 
 // Use a quantitative state vector/context when generating new fuzzer strings.
@@ -29,8 +29,8 @@ typedef struct _fuzz_generator_counter_t {
 typedef struct _fuzz_generator_state_vector_t {
     // Array of pointers to counters tracking each nest/subsequence level.
     counter_t* counter[FUZZ_MAX_NESTING_COMPLEXITY];
-    size_t nest_level;   // tracks the current index into ^
     void* p_fuzz_factory_base;   // base ptr to the fuzz factory's blob data
+    size_t nest_level;   // tracks the current index into ^
 } __attribute__((__packed__)) state_t;
 
 // This struct is used to 'prime' the generator by directly providing a pre-
@@ -341,6 +341,8 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 // Get the pointer to the counter for the current nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
                 counter_t* p_ctr = *((p_ctx->state).counter + *lvl);
+//printf( "SUB ENTER LVL: |%lu|\n", *(lvl)+1 );
+                if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // Set the amount to generate and zero out the 'generated' counter.
                 memset( p_ctr, 0, sizeof(counter_t) );
@@ -363,6 +365,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 // Get the pointer to the counter for the __PREVIOUS__ (outer) nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
                 counter_t* p_ctr = *((p_ctx->state).counter + *lvl - 1);
+                if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // If 'nullified' is set, check the p_ctr address to see if it matches. If so,
                 //   unset the nullification and break out of the null'd sub. Regardless, don't
@@ -381,7 +384,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 //   BEFORE the conditional.
                 (p_ctr->generated)++;
 
-                if ( p_ctr->generated < p_ctr->how_many ) {
+                if ( UINT16_MAX != p_ctr->generated && p_ctr->generated < p_ctr->how_many ) {
                     // Back the pip back to where it needs to be (we blindly trust it)
                     //   and increase the generator count.
                     pip -= *((size_t*)(pip->data));
@@ -448,7 +451,12 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
     __gen_overflow:
         // When a buffer is going to overflow, STOP and RESET!
-        memset( p_ctx->p_data_pool, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+        memset( p_ctx->p_data_pool, 0,
+            ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+        (p_ctx->state).nest_level = 0;   //reset on overflow
+        p_ctx->p_most_recent = NULL;
+
+        // Return NULL to indicate crashy conditions.
         return NULL;
 }
 

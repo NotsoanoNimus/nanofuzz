@@ -10,6 +10,7 @@
 
 #include "pattern.h"
 #include "generator.h"
+#include "fuzz_error.h"
 
 #include <stdio.h>
 

@@ -24,6 +24,7 @@ TESTBIN=$(TEST)/bin
 TESTOBJS=$(patsubst $(TEST)/%.c, $(TESTOBJ)/%.o, $(TESTS))
 TESTBINS=$(patsubst $(TEST)/%.c, $(TESTBIN)/%, $(TESTS))
 TEST_COMPLIANCE=$(TEST)/compliance.py
+TEST_ITERS=50
 
 
 # By default, don't run tests. Just build the application.
@@ -43,6 +44,7 @@ $(SLIBOUT): $(LIB) $(OBJ) $(OBJS)
 # Release build is intended the be 'optimized' and tested thoroughly.
 release: CFLAGS=$(COMMONFLAGS) -O3 -DNDEBUG
 release: clean
+release: TEST_ITERS=500
 release: tests
 
 
@@ -74,7 +76,7 @@ tests:CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLA
 tests: all slib $(TESTOBJ) $(TESTBIN) $(TESTBINS)
 	for x in $(TESTBINS) ; do ./$$x ; done
 	if [ ! -x $(TEST_COMPLIANCE) ]; then chmod +x $(TEST_COMPLIANCE); fi
-	$(TEST_COMPLIANCE) 50
+	$(TEST_COMPLIANCE) $(TEST_ITERS)
 
 $(TESTOBJ):
 	-mkdir $(TESTOBJ)
