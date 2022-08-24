@@ -67,7 +67,7 @@ struct _fuzz_ctx_t {
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
 static int __branch_write_end( List_t** pp_seq, fuzz_branch_root_t* p_branch_root,
-    struct _fuzz_ctx_t* const p_ctx );
+    struct _fuzz_ctx_t* const p_ctx, int is_post_run );
 static size_t __search_branch_root_index( List_t** pp_seq, fuzz_branch_root_t* p_branch_root );
 static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards );
 
@@ -328,7 +328,6 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(p->data);
 
                 switch ( p_ref->type ) {
-//                    case ref_declaration : {  p_reftype = "Review pre-declared"; break;  }
                     case ref_reference      : {  p_reftype = "Paste pre-generated"; break;  }
                     case ref_count          : {  p_reftype = "Output the length of the"; break;  }
                     case ref_count_nullterm : {  p_reftype = "Output the length (+1) of the"; break;  }
@@ -940,6 +939,8 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 }
 
                 // Set 'p' to end. It will increment to the character after '}' once the for-loop continues.
+                //   Also nullify the tracker so repetition mechs can't be chained.
+                *((p_ctx->p_nest_tracker)+nest_level) = NULL;
                 p = end;
                 break;
             }
@@ -1142,7 +1143,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
             } else if ( 1 == is_branching ) {
                 // Go back and mark the branch jmp types with the proper distance from this node.
-                if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx )  ) {
+                if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx, 0 )  ) {
                     p_seq = List__reverse( p_seq );   //the inner method reverses
 
                     ListNode_t* x = List__drop_node(  p_seq, List__get_head( p_seq )  );
@@ -1182,7 +1183,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     //   it will become '1', which doesn't give the opportunity for the 'else-if'
     //   above to run for that branch.
     if ( is_branching > 0 ) {
-        if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx )  ) {
+        if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx, 1 )  ) {
             Error__add(
                 p_ctx->p_err,
                 p_ctx->nest_level,
@@ -1640,7 +1641,8 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
 static int __branch_write_end(
     List_t** pp_seq,
     fuzz_branch_root_t* p_branch_root,
-    struct _fuzz_ctx_t* const p_ctx
+    struct _fuzz_ctx_t* const p_ctx,
+    int is_post_run
 ) {
 //printf( "NLVL (%lu) / PCTX (%d)\n", (p_ctx ? p_ctx->nest_level : -1), (NULL != p_ctx) );
     // Reverse the input list so that when iterating from the list head to tail,
@@ -1700,7 +1702,11 @@ static int __branch_write_end(
         //   root ('move') and the distance to the end of the list in its current state.
         fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lnode->node);
         if ( branch_jmp == p_block->type ) {
-            *((size_t*)(p_block->data)) = (dist_to_end - move);
+            // Add 1 if inside a sub, since the trailing 'ret' is the jmp target, not simply
+            //   the end of the nodes list.
+            // TODO: Revisit and THOROUGHLY test. Why does this work exactly?
+            *((size_t*)(p_block->data)) = (dist_to_end - move +
+                (sub == p_prev->type || (0 != p_ctx->nest_level && is_post_run)));
         } else  return 0;
     }
 
