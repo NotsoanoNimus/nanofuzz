@@ -1,6 +1,6 @@
 CC=gcc
 COMMONFLAGS=-g -Wall
-CFLAGS=$(COMMONFLAGS) -DDEBUG
+CFLAGS=$(COMMONFLAGS) -O0 -DDEBUG
 
 PROJNAME=nanofuzz
 
@@ -42,9 +42,9 @@ $(SLIBOUT): $(LIB) $(OBJ) $(OBJS)
 
 
 # Release build is intended the be 'optimized' and tested thoroughly.
-release: CFLAGS=$(COMMONFLAGS) -O3 -DNDEBUG
 release: clean
-release: TEST_ITERS=500
+release: EXTFLAGS=-O3 -DNDEBUG
+release: TEST_ITERS=100
 release: tests
 
 
@@ -63,6 +63,7 @@ $(BINDIR):
 	-mkdir $(BINDIR)
 
 $(OBJ)/%.o: $(SRC)/%.c
+	echo "CFLAGS: |$(CFLAGS)|"
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BIN): $(OBJ) $(BINDIR) $(OBJS)
@@ -72,7 +73,7 @@ $(BIN): $(OBJ) $(BINDIR) $(OBJS)
 
 # TEST CASES. Creates the necessary folder structure for Criterion tests, and run them.
 .PHONY: tests
-tests:CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS)
+tests: CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS) $(EXTFLAGS)
 tests: all slib $(TESTOBJ) $(TESTBIN) $(TESTBINS)
 	for x in $(TESTBINS) ; do ./$$x ; done
 	if [ ! -x $(TEST_COMPLIANCE) ]; then chmod +x $(TEST_COMPLIANCE); fi

@@ -155,7 +155,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
     fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
     unsigned char* p_current;
-    counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
+    volatile counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
 
     pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
     p_current = p_ctx->p_data_pool;

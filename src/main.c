@@ -20,12 +20,10 @@
 #include <linux/limits.h>
 
 #include "api.h"
-//#include "pattern.h"
-//#include "generator.h"
 
 
 
-void __print_usage_info() {
+static void __print_usage_info() {
     printf(
         "Usage: nanofuzz {-i|-p pattern|-f pattern-file} [-l count] [-w] [-o output-file]\n"
         "\n"
@@ -246,9 +244,10 @@ int main( int argc, char* const argv[] ) {
 
     // If FLAG_NO_SCRUB_WHITESPACE is NOT set, scrub out any whitespace characters from the input.
     //   This includes 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20.
-    if ( p_pattern_contents && !(app_flags & FLAG_NO_SCRUB_WHITESPACE) ) {
-        char *p_i, *p_j;
-        for ( p_i = p_pattern_contents; *(p_i); ) {
+    if (  NULL != p_pattern_contents && !(app_flags & FLAG_NO_SCRUB_WHITESPACE)  ) {
+        char* p_i = NULL;
+        char* p_j = NULL;
+        for ( p_i = p_pattern_contents; p_i && *(p_i); ) {
             switch ( (int)(*p_i) ) {
                 case 0x09 :
                 case 0x0A :
@@ -256,7 +255,7 @@ int main( int argc, char* const argv[] ) {
                 case 0x0C :
                 case 0x0D :
                 case 0x20 :
-                    for ( p_j = p_i; *(p_j); p_j++ )
+                    for ( p_j = p_i; p_j && *(p_j); p_j++ )
                         *p_j = *(p_j + 1);
                     break;
                 default :
@@ -342,7 +341,7 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
         // Ensure the pattern file or STDIN is valid, and a string with 1 or more chars is read from it.
         static char buffer[32] = {0};
         size_t bytes = 0, read_count = 0, file_size = 0;
-        char* p_pattern_data;
+        char* p_pattern_data = NULL;
 
         // Get the file size.
         if ( gets_size ) {
@@ -367,14 +366,14 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
                 (unsigned long)FUZZ_MAX_PATTERN_LENGTH );
 
         // Allocate the buffer in the heap to store the file's contents.
-        char* p_read = (char*)calloc( 1, (file_size+1) );
+        char* p_read = (char*)calloc( (file_size+1), 1 );
 
         while ( (bytes = fread( buffer, sizeof(unsigned char), sizeof(buffer), fp_file )) ) {
             if ( (read_count+bytes) > file_size )
                 errx( 1, "The pattern exceeded the expected file size of %lu bytes.\n", file_size );
 
             if ( strnlen( buffer, sizeof(buffer) ) )
-                strcat( p_read, buffer );
+                memcpy( (p_read+read_count), buffer, bytes );
 
             memset( buffer, 0, sizeof(buffer) );
 
@@ -383,7 +382,7 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
         }
 
         // Now assign the read contents to the pattern_contents location.
-        p_pattern_data = strndup(  p_read, strnlen( p_read, FUZZ_MAX_PATTERN_LENGTH-1 )  );
+        p_pattern_data = strdup( p_read ); //, strnlen( p_read, FUZZ_MAX_PATTERN_LENGTH-1 )  );
 
         if ( p_read != NULL )  free( p_read );
 

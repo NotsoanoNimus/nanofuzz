@@ -26,11 +26,27 @@
 #
 
 
-import sys, os, re, traceback
+import sys, os, re, traceback, timeit
 
 def usage():
     print( "USAGE: " + sys.argv[0] + " {iterations}" )
     sys.exit(1)
+
+
+# Simple progress bar.
+def __progress_bar( files, total_files ):
+    if total_files == 0:
+        return
+    print( "\r\tParsing [", end="" )
+    hashes = ""
+    max_hashes = 40
+    hashes_count = int( (files/total_files) * max_hashes )
+    for x in range(hashes_count):
+        hashes += "■"
+    for x in range(max_hashes-hashes_count):
+        hashes += " "
+    color_print( hashes, BLUE, is_newline=False )
+    print( "] (" + str(files) + "/" + str(total_files) + ")", end="" )
 
 
 # Terminal colors for our delight (thank you, StackOverflow).
@@ -95,9 +111,8 @@ def pattern_to_regex( pattern ):
 
     # Scrub variables and expand where included.
     #   Remove shuffle operators for vars, but be careful not to destroy any existing branches.
-    #   Ex: 'a|b|<%VAR>|c|d' --> 'a|b|(.{0})|c|d'   /// 'a|b|c|d|<%VAR>' --> 'a|b|c|d'
-    _regex = re.sub( r'<%[A-Za-z0-9]+>', '', _regex )
-    _regex = re.sub( r'\|\|', '|(.{0})|', _regex )
+    #   Ex: 'a|b|<%VAR>|c|d' --> 'a|b|(.{0})|c|d'   /// 'a|b|c|d|<%VAR>' --> 'a|b|c|d|(.{0})'
+    _regex = re.sub( r'<%[A-Za-z0-9]+>', '(.{0})', _regex )
 
     # Find variable declarations and expand their occurrences.
     try:
@@ -223,17 +238,6 @@ for file in os.listdir( myfullpath + "/compliance/" ):
         print( "Content: ", end="" )
         color_print( content, PURPLE )
 
-    # Begin tester iterations.
-    call_ec = os.system( myfullpath + "/../bin/nanofuzz -f " + myfullpath+"/compliance/"+file
-        + " -l " + str(iters) + " -o " + myfullpath+"/compliance/"
-        + re.sub(r'(?i)\.txt$', '', file) + "*.gen >&/dev/null" )
-
-    call_ec >>= 8
-    if call_ec != 0:
-        color_print( "Failed to call nanofuzz for the input pattern.", RED, is_bold=True )
-        failed += 1
-        continue
-
     # Translate the content into a corresponding regex to use for validating the generation.
     regex = ""
     regex_obj = None
@@ -245,31 +249,71 @@ for file in os.listdir( myfullpath + "/compliance/" ):
     except:
         color_print( "Failed to transform the content string into a "
             + "parseable regular expression.", RED, is_bold=True )
-        traceback.print_exc()
+        #traceback.print_exc()
         failed += 1
         continue
 
     print( "Regex  : ", end="" )
     color_print( regex, PURPLE )
 
+
+    # Begin tester iterations and attempt to time them.
+    print( "\tGenerating...    ", end="" )
+    sys.stdout.flush()
+
+    call_ec = 255
+    fuzzer_call = ( myfullpath + "/../bin/nanofuzz -f " + myfullpath+"/compliance/"+file
+        + " -l " + str(iters) + " -o " + myfullpath+"/compliance/"
+        + re.sub(r'(?i)\.txt$', '', file) + "*.gen >&/dev/null" )
+
+    gen_time = timeit.timeit( lambda: os.system(fuzzer_call), number=1 )
+
+    call_ec >>= 8
+    if call_ec != 0:
+        color_print( "\rFailed to call nanofuzz for the input pattern.", RED, is_bold=True )
+        failed += 1
+        continue
+    else:
+        print( "Finished content generation in ", end="" )
+        color_print( str(round(gen_time,3))+" seconds", WHITE, is_bold=True, is_newline=False )
+        print( ".", end="" )
+
+
     # Compare the binary regex_obj against the binary gen-file contents.
+    #   TODO: This is quite inefficient (probably don't care); total_files should == iters
+    total_files = 0
+    for genfile in os.listdir( myfullpath+'/compliance/' ):
+        if genfile.endswith( ".gen" ):
+            total_files += 1
+    if total_files != iters:
+        color_print( "\rFailed to call nanofuzz for the input pattern.               ",
+            RED, is_bold=True )
+        failed += 1
+        continue
+    else:
+        print( "\n", end="" )
+
     files = 0
     reg_fail = 0
     for genfile in os.listdir( myfullpath+'/compliance/' ):
         if genfile.endswith( ".gen" ):
             with open( myfullpath+'/compliance/'+genfile, mode='rb' ) as genhnd:
                 files += 1
+                __progress_bar( files, total_files )
                 file_content = genhnd.read()
                 if re.fullmatch( regex_obj, file_content ) is None:
-                    print(file_content)
+                    try:
+                        os.rename( myfullpath+'/compliance/'+genfile, myfullpath+'/compliance/errors/'+genfile )
+                    except:
+                        pass
                     reg_fail += 1
 
     # Simple tracking.
     if reg_fail == 0:
-        color_print( "\tSuccess for "+str(files)+" of "+str(files)+" files.", GREEN )
+        color_print( "\n\tSuccess for "+str(files)+" of "+str(files)+" files.", GREEN )
         succeeded += 1
     else:
-        color_print( "\tFailed regex tests for "+str(reg_fail)+" of "+str(files)+" files.", RED )
+        color_print( "\n\tFailed regex tests for "+str(reg_fail)+" of "+str(files)+" files.", RED )
         failed += 1
 
 
