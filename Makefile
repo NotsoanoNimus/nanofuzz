@@ -1,5 +1,5 @@
 CC=gcc
-COMMONFLAGS=-g -Wall
+COMMONFLAGS=-g -Wall -lpthread
 CFLAGS=$(COMMONFLAGS) -O0 -DDEBUG
 
 PROJNAME=nanofuzz
@@ -63,7 +63,6 @@ $(BINDIR):
 	-mkdir $(BINDIR)
 
 $(OBJ)/%.o: $(SRC)/%.c
-	echo "CFLAGS: |$(CFLAGS)|"
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BIN): $(OBJ) $(BINDIR) $(OBJS)

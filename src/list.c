@@ -13,7 +13,7 @@
 struct _linked_list_t {
     struct _linked_list_node_t* head;
     size_t max_size;
-} __attribute__((__packed__));
+};
 
 
 

@@ -19,10 +19,7 @@
 typedef struct _fuzz_generator_counter_t {
     unsigned short how_many;   // how many (chosen randomly within range)
     unsigned short generated;   // count of items already iterated/generated
-//    void* p_goto;   // the pointer to reference when iterating
-//    // ^ it doesn't matter if this points to a sub or a string, the type controls
-//    //   exactly what is done with it
-} __attribute__((__packed__)) counter_t;
+} counter_t;
 
 // Use a quantitative state vector/context when generating new fuzzer strings.
 //   These are disposable structures used only during active string generation.
@@ -31,7 +28,7 @@ typedef struct _fuzz_generator_state_vector_t {
     counter_t* counter[FUZZ_MAX_NESTING_COMPLEXITY];
     void* p_fuzz_factory_base;   // base ptr to the fuzz factory's blob data
     size_t nest_level;   // tracks the current index into ^
-} __attribute__((__packed__)) state_t;
+} state_t;
 
 // This struct is used to 'prime' the generator by directly providing a pre-
 //   allocated context to re/use for 'get_next' operations. Sharing this context
@@ -61,7 +58,7 @@ static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t*
     // Search the index opaquely for the hash. If found, return the pointer. Else, NULL.
     void* p_scroll;
     size_t i;
-    size_t struct_size = (sizeof(unsigned long)+sizeof(fuzz_gen_ctx_t*));
+    size_t struct_size = FuzzHash__sizeof();
     for (
         p_scroll = PatternFactory__get_shard_index_ptr( p_ff ), i = 0;
         i < FUZZ_MAX_VARIABLES;
@@ -155,7 +152,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
     fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
     unsigned char* p_current;
-    volatile counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
+    counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
 
     pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
     p_current = p_ctx->p_data_pool;

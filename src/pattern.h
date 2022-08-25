@@ -72,7 +72,7 @@ typedef struct _fuzz_repetition_t {
     unsigned char single;   // If non-zero, 'base' value is amount to generate; no ranging.
     unsigned short base;
     unsigned short high;
-} __attribute__((__packed__)) fuzz_repetition_t;
+} fuzz_repetition_t;
 
 // A structure populated by the lexer's parsing of the 'range' mechanism.
 typedef struct _fuzz_range_t {
@@ -82,13 +82,13 @@ typedef struct _fuzz_range_t {
     //   struct will be limited to a max (customizable) ranges amount.
     fuzz_repetition_t fragments[FUZZ_MAX_PATTERN_RANGE_FRAGMENTS];
     size_t amount;
-} __attribute__((__packed__)) fuzz_range_t;
+} fuzz_range_t;
 
 // Used in branch ROOT mechanisms to elect a forward-path in the node sequence.
 typedef struct _fuzz_branch_root_t {
     unsigned short steps[FUZZ_MAX_STEPS];   // the different forward-step counts available
     size_t amount;   // how many steps are defined to choose from
-} __attribute__((__packed__)) fuzz_branch_root_t;
+} fuzz_branch_root_t;
 
 // A block (or "piece") of an interpreted part of the input pattern information.
 typedef struct _fuzz_pattern_block_t {
@@ -100,7 +100,7 @@ typedef struct _fuzz_pattern_block_t {
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
     fuzz_repetition_t count;
-} __attribute__((__packed__)) fuzz_pattern_block_t;
+} fuzz_pattern_block_t;
 
 
 
@@ -121,6 +121,9 @@ void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 // Generate a pattern factory from an input pattern string.
 //   This method is wrapped in the API calls.
 fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p_err );
+
+// Extra function for sizeof private type. TODO: Necessary?
+size_t FuzzHash__sizeof( void );
 
 
 

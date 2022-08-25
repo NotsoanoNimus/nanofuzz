@@ -23,7 +23,7 @@
 typedef struct _linked_list_node_t {
     void* node;
     struct _linked_list_node_t* next;
-} __attribute__((__packed__)) ListNode_t;
+} ListNode_t;
 
 typedef struct _linked_list_t List_t;
 

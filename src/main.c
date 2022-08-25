@@ -16,10 +16,15 @@
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #include <linux/limits.h>
 
 #include "api.h"
+
+// Define constants as necessary.
+#define FUZZ_MAX_THREADS 16
 
 
 
@@ -36,6 +41,8 @@ static void __print_usage_info() {
         "    -i, --stdin        Read the pattern schema as a string from STDIN.\n"
         "    -p, --pattern      Read the pattern schema from the provided option parameter.\n"
         "    -f, --file         Read the pattern schema from a specified text file.\n"
+        "    -t, --threads      Number of threads to spawn (between 1 and %d) for generation.\n"
+        "                         Be careful setting this option above available resources.\n"
         "    -l, --limit        Print only 'count' generated lines and stop.\n"
         "    -w, --whitespace   Interpret all input white-space characters (' ', TAB, LF, etc.)\n"
         "                         as part of the pattern sequence. When this option is NOT used,\n"
@@ -48,7 +55,7 @@ static void __print_usage_info() {
         "                         wildcard expands to the current iteration number, from 0 to\n"
         "                         the '--limit' value minus one, if specified.\n"
         "\n"
-        "\n"
+        "\n", FUZZ_MAX_THREADS
     );
     exit( 1 );
 }
@@ -56,11 +63,12 @@ static void __print_usage_info() {
 
 
 // Other function declarations.
+void* thread_do_work( void* p_work );
+void thread_update_amount( size_t generated );
 static void register_signal_handlers();
 static void handle_signal( int signal );
 static char* read_data_from_file( FILE* fp_file, bool gets_size );
-void write_to_out_file( char* p_output_file, nanofuzz_data_t* p_data,
-    size_t gen_num, size_t pfx );
+void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx );
 #ifdef DEBUG
 static void debug__print_hex( const char* p_dump_tag, const char* p_content, size_t len ) {
     printf( "DEBUG: HEX of '%s':\n", p_dump_tag );
@@ -75,6 +83,31 @@ static void debug__print_hex( const char* p_dump_tag, const char* p_content, siz
 static void debug__print_hex( const char* p_dump_tag, const char* p_content, size_t len ) {  }
 #endif   /* DEBUG */
 
+
+// Internal structure for providing spawned threads with information and 'work to do'.
+typedef struct _thread_work_t {
+    nanofuzz_context_t* p_fuzz_ctx;   //reuseable generator context (pattern never changes)
+    size_t jobs;   //amount to generate
+    size_t counter;   //number to start at (when outputting to files)
+    size_t pfx;   //file prefix in case of overflows in 'counter'
+} thread_work_t;
+
+// Thread context wrapper struct.
+typedef struct _thread_ctx_t {
+    pthread_t thread;   //the current thread being checked/assigned
+    thread_work_t* p_work;   //its workload
+} thread_ctx_t;
+
+
+// Define global variables as needed.
+static size_t amount_generated = 0;   // Amount done so far
+static size_t amount_to_generate = 1;   // Amount of cycles
+static pthread_mutex_t _amount_mutex   // mutex for ^ counter
+    = PTHREAD_MUTEX_INITIALIZER;
+static thread_ctx_t* threads[FUZZ_MAX_THREADS];   // App-global thread context ptrs
+static char* p_output_file = NULL;   //pointer to the template name of out files
+
+
 // Define a flags register and some bit indices.
 static uint32_t app_flags = 0x00000000;
 #define FLAG_PATTERN_STDIN (1 << 0)
@@ -83,6 +116,9 @@ static uint32_t app_flags = 0x00000000;
 #define FLAG_NO_SCRUB_WHITESPACE (1 << 3)
 #define FLAG_COUNT_SET (1 << 4)
 #define FLAG_WRITE_TO_FILE (1 << 5)
+#define FLAG_OUTFILE_DYNAMIC (1 << 6)
+#define FLAG_THREAD_COUNT (1 << 7)
+
 
 
 // Main.
@@ -96,6 +132,7 @@ int main( int argc, char* const argv[] ) {
         { "stdin",      no_argument,        NULL,  'i' },
         { "pattern",    required_argument,  NULL,  'p' },
         { "file",       required_argument,  NULL,  'f' },
+        { "threads",    required_argument,  NULL,  't' },
         { "limit",      required_argument,  NULL,  'l' },
         { "whitespace", no_argument,        NULL,  'w' },
         { "output",     required_argument,  NULL,  'o' },
@@ -105,15 +142,13 @@ int main( int argc, char* const argv[] ) {
     int cli_opt_idx = 0;
     int cli_opt;
 
+    size_t worker_threads = 0;
+
     char* p_pattern_file_path = NULL;
     char* p_pattern_contents = NULL;
 
-    char* p_output_file = NULL;
-
-    size_t amount_to_generate = 1;
-
     for ( ; ; ) {
-        cli_opt = getopt_long( argc, argv, "hip:f:l:wo:", cli_long_opts, &cli_opt_idx );
+        cli_opt = getopt_long( argc, argv, "hip:f:t:l:wo:", cli_long_opts, &cli_opt_idx );
         if ( cli_opt == -1 )  break;
         switch ( cli_opt ) {
             case '?':
@@ -168,6 +203,29 @@ int main( int argc, char* const argv[] ) {
 
                 break;
 
+            case 't':
+                if ( (app_flags & FLAG_THREAD_COUNT) )
+                    errx( 1, "The count of worker threads can only be specified once.\n" );
+
+                app_flags |= FLAG_THREAD_COUNT;
+
+                for ( const char* x = optarg; (*x); x++ )
+                    if ( !isdigit( (int)(*x) ) )
+                        errx( 1, "The '-t' option's value must be a"
+                            " positive integer between 1 and %d.\n", FUZZ_MAX_THREADS );
+
+                errno = 0;
+                worker_threads = (size_t)strtoul( optarg, NULL, 10 );
+                if ( errno ) {
+                    perror( "'-t' option" );
+                    exit( 1 );
+                } else if ( worker_threads > FUZZ_MAX_THREADS || worker_threads < 1 ) {
+                        errx( 1, "The '-t' option's value must be a"
+                            " positive integer between 1 and %d.\n", FUZZ_MAX_THREADS );
+                }
+
+                break;
+
             case 'l':
                 if ( (app_flags & FLAG_COUNT_SET) )
                     errx( 1, "The count of generated lines can only be specified once.\n" );
@@ -196,17 +254,35 @@ int main( int argc, char* const argv[] ) {
                 break;
 
             case 'o':
+                if ( (app_flags & FLAG_WRITE_TO_FILE) )
+                    errx( 1, "The output file format '-o' can only be specified once.\n" );
+
                 // -32 to account for size_t string expansion
                 p_output_file = strndup( optarg, (PATH_MAX-33) );
 
-                if ( NULL == p_output_file || strnlen( p_output_file, 2 ) < 2 ) {
+                if ( NULL == p_output_file || strnlen( p_output_file, 2 ) < 2 )
                     errx( 1, "Misunderstood output filename for the '-o' option.\n" );
-                }
 
                 app_flags |= FLAG_WRITE_TO_FILE;
+
+                // Need to verify that if threading is used, filenames have a wildcard.
+                for ( const char* x = p_output_file; (*x); x++ ) {
+                    if ( '*' == *x ) {
+                        app_flags |= FLAG_OUTFILE_DYNAMIC;
+                        break;
+                    }
+                }
+
                 break;
         }
     }
+
+
+    // Make sure that if threading is enabled, a wildcard was used in the output filename.
+    if ( (app_flags & FLAG_WRITE_TO_FILE) && (app_flags & FLAG_THREAD_COUNT) )
+        if ( !(app_flags & FLAG_OUTFILE_DYNAMIC) )
+            errx( 1, "Threading with file output REQUIRES the use of a"
+                " wildcard '*' character in the outfile.\n" );
 
 
     // Now double-check options provided through the application's options as needed.
@@ -276,6 +352,8 @@ int main( int argc, char* const argv[] ) {
     // Parse the input pattern and init a fuzzer context.
     nanofuzz_context_t* p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_err_ctx );
     if ( NULL == p_fuzz_ctx ) {
+        // If the program can't understand the pattern, die.
+        Nanofuzz__delete( p_fuzz_ctx );
         Error__print( p_err_ctx, stderr );
         free( p_pattern_contents );
         exit( 1 );
@@ -286,29 +364,85 @@ int main( int argc, char* const argv[] ) {
 
     // Generate data using the constructed context. If amount_to_generate is less than 1
     //   the program will loop. This is intentional.
-    size_t i = 0, gen_num = 0, pfx = 0;
-    while ( i < amount_to_generate || !amount_to_generate ) {
+    if ( worker_threads <= 1 ) {
+        size_t i = 0, gen_num = 0, pfx = 0;
+        while ( i < amount_to_generate || !amount_to_generate ) {
 
-        nanofuzz_data_t* p_data = Nanofuzz__get_next( p_fuzz_ctx );
+            nanofuzz_data_t* p_data = Nanofuzz__get_next( p_fuzz_ctx );
 
-        if ( p_data ) {
-            if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
-                write_to_out_file( p_output_file, p_data, gen_num, pfx );
+            if ( NULL != p_data ) {
+                if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
+                    write_to_out_file( p_data, gen_num, pfx );
+                } else {
+                    //printf(  "%s\n", (const char*)(p_data->output)  );
+                }
             } else {
-                printf(  "%s\n", (const char*)(p_data->output)  );
+                printf( "Content generation failure.\n" );
+                exit(1);
             }
-        } else {
-            printf( "Content generation failure.\n" );
-            exit(1);
+
+            Nanofuzz__delete_data( p_data );
+            if ( amount_to_generate )  i++;
+
+            // I mean really, this shouldn't happen but.....
+            gen_num++;
+            if ( gen_num >= UINT64_MAX )  pfx++;
+        }
+    } else {
+        // Init the list of thread context pointers to 0.
+        memset( &threads, 0, (sizeof(thread_ctx_t*)*FUZZ_MAX_THREADS) );
+
+        thread_ctx_t** pp_tctx = &(threads[0]);
+        fuzz_error_t* p_dummy_ctx = NULL;
+
+        for ( size_t i = 0; i < worker_threads; i++ ) {
+            *(pp_tctx+i) = (thread_ctx_t*)calloc( 1, sizeof(thread_ctx_t) );
+
+            // Assign the work to-do based on the amount to generate and the amount of threads.
+            thread_work_t* p_wrk = (thread_work_t*)calloc( 1, sizeof(thread_work_t) );
+            p_wrk->pfx = 0;   //always initially 0
+            p_wrk->jobs = (amount_to_generate / worker_threads);
+            p_wrk->counter = (i * p_wrk->jobs);   //at its place in line
+            // ^ ex: 100,000 jobs; 4 threads ==> 0-24,999; 25,000-49,999; etc.
+            if ( i == (worker_threads-1) ) {   //on the last thread in line...
+                // get the final difference between what was already alloc'd and what's left to do
+                p_wrk->jobs = amount_to_generate - (p_wrk->jobs * (worker_threads-1));
+            }
+printf( "WORK: |%lu jobs|  |%lu counter|\n", p_wrk->jobs, p_wrk->counter );
+
+            (*(pp_tctx+i))->p_work = p_wrk;
+
+            // Create the fuzzer contexts, one per thread.
+            //   No need for error context informstion since the above context creation worked.
+            (*(pp_tctx+i))->p_work->p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_dummy_ctx );
+            if ( NULL == (*(pp_tctx+i))->p_work->p_fuzz_ctx )
+                errx( 1, "Failed to create worker thread #%lu. Aborting.\n", i );
+
+            Error__delete( p_dummy_ctx );
+
+            // Create a thread attribute block for detached state.
+            pthread_attr_t tattr;
+            pthread_attr_init( &tattr );
+            pthread_attr_setdetachstate( &tattr, 1 );
+
+            // Create the pthread and save the pointer.
+            memset( &((*(pp_tctx+i))->thread), 0, sizeof(pthread_t) );
+//            pthread_t* _p_thread = (pthread_t*)calloc( 1, sizeof(pthread_t) );
+
+            int rc = pthread_create( &((*(pp_tctx+i))->thread), &tattr, thread_do_work, (*(pp_tctx+i))->p_work );
+//            int rc = pthread_create( _p_thread, &tattr, thread_do_work, (*(pp_tctx+i))->p_work );
+            if ( rc )  errx( 1, "Failed to create worker thread #%lu. Aborting.\n", i );
+
+            pthread_attr_destroy( &tattr );
+//            (*(pp_tctx+i))->p_thread = _p_thread;
         }
 
-        Nanofuzz__delete_data( p_data );
-        if ( amount_to_generate )  i++;
-
-        // I mean really, this shouldn't happen but.....
-        gen_num++;
-        if ( gen_num >= UINT64_MAX )  pfx++;
-
+        size_t amount_queued = 0;
+        while ( amount_generated < amount_to_generate || !amount_to_generate ) {
+//printf( "GENERATED: |%lu| / |%lu|\n", amount_generated, amount_to_generate );
+            usleep( 10000 );
+        }
+printf( "GENERATED: |%lu| / |%lu|\n", amount_generated, amount_to_generate );
     }
 
 
@@ -316,6 +450,42 @@ int main( int argc, char* const argv[] ) {
     Nanofuzz__delete( p_fuzz_ctx );
     free( p_output_file );
     free( p_pattern_contents );
+}
+
+
+
+// Threading function to generate fuzzer data from each thread, until there
+//   is no more work to do in the current context.
+void* thread_do_work( void* p_work ) {
+    thread_work_t* p_do = (thread_work_t*)p_work;
+
+    size_t howmany = p_do->jobs;
+    while ( howmany ) {
+        nanofuzz_data_t* p_data = Nanofuzz__get_next( p_do->p_fuzz_ctx );
+        if ( NULL != p_data ) {
+            if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
+                 write_to_out_file( p_data,
+                    (p_do->counter + (p_do->jobs - howmany)), p_do->pfx );
+            } else {
+                //printf(  "%s\n", (const char*)(p_data->output)  );
+            }
+        }
+
+        Nanofuzz__delete_data( p_data );
+        howmany--;
+    }
+
+    thread_update_amount( p_do->jobs );
+
+    return NULL;
+}
+
+
+// If the program is not running until infinity, decrement the amount counter until <= 0.
+void thread_update_amount( size_t generated ) {
+    pthread_mutex_lock( &_amount_mutex );
+    amount_generated += generated;
+    pthread_mutex_unlock( &_amount_mutex );
 }
 
 
@@ -395,14 +565,9 @@ static char* read_data_from_file( FILE* fp_file, bool gets_size ) {
 
 
 
-void write_to_out_file(
-    char* p_output_file,
-    nanofuzz_data_t* p_data,
-    size_t gen_num,
-    size_t pfx
-) {
+void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx ) {
 
-    if ( NULL == p_data || 0 == p_data->length )  return;
+    if ( NULL == p_output_file || NULL == p_data || 0 == p_data->length )  return;
 
     char* const x = (char*)calloc( PATH_MAX, sizeof(char) );   //intermediate
     char* const p_filename = (char*)calloc( PATH_MAX, sizeof(char) );

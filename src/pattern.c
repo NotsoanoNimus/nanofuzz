@@ -33,7 +33,8 @@ typedef struct _fuzz_reference_shard_t {
 typedef struct _fuzz_hash_to_gen_ctx_t {
     unsigned long _hash;    //the hash (using 'djb2')
     fuzz_gen_ctx_t* _ctx;   //the generator context assoc w/ the string hash
-} __attribute__((__packed__))  _hash_to_gen_ctx_t;
+} _hash_to_gen_ctx_t;
+size_t FuzzHash__sizeof( void ) {  return sizeof(_hash_to_gen_ctx_t);  }
 
 // Represents a single contiguous block of memory which all of the block items get joined into.
 //   This is what nanofuzz will actually use in generating content.
