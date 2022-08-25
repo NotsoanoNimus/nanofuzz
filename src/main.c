@@ -244,6 +244,8 @@ int main( int argc, char* const argv[] ) {
                     if ( errno ) {
                         perror( "'-l' option" );
                         exit( 1 );
+                    } else if ( amount_to_generate <= 0 ) {
+                        errx( 1, "The '-l' option's value must be a positive, base-10 (decimal) integer.\n" );
                     }
                 }
 
@@ -401,14 +403,14 @@ int main( int argc, char* const argv[] ) {
             // Assign the work to-do based on the amount to generate and the amount of threads.
             thread_work_t* p_wrk = (thread_work_t*)calloc( 1, sizeof(thread_work_t) );
             p_wrk->pfx = 0;   //always initially 0
-            p_wrk->jobs = (amount_to_generate / worker_threads);
+            p_wrk->jobs = ( amount_to_generate ? (amount_to_generate / worker_threads) : UINT64_MAX );
             p_wrk->counter = (i * p_wrk->jobs);   //at its place in line
             // ^ ex: 100,000 jobs; 4 threads ==> 0-24,999; 25,000-49,999; etc.
-            if ( i == (worker_threads-1) ) {   //on the last thread in line...
+            if ( amount_to_generate && (i == (worker_threads-1)) ) {   //on the last thread in line...
                 // get the final difference between what was already alloc'd and what's left to do
                 p_wrk->jobs = amount_to_generate - (p_wrk->jobs * (worker_threads-1));
             }
-printf( "WORK: |%lu jobs|  |%lu counter|\n", p_wrk->jobs, p_wrk->counter );
+            //printf( "WORK: |%lu jobs|  |%lu counter|\n", p_wrk->jobs, p_wrk->counter );
 
             (*(pp_tctx+i))->p_work = p_wrk;
 
@@ -416,7 +418,7 @@ printf( "WORK: |%lu jobs|  |%lu counter|\n", p_wrk->jobs, p_wrk->counter );
             //   No need for error context informstion since the above context creation worked.
             (*(pp_tctx+i))->p_work->p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_dummy_ctx );
             if ( NULL == (*(pp_tctx+i))->p_work->p_fuzz_ctx )
-                errx( 1, "Failed to create worker thread #%lu. Aborting.\n", i );
+                errx( 1, "Failed to create fuzzing context in worker thread #%lu. Aborting.\n", i );
 
             Error__delete( p_dummy_ctx );
 
@@ -427,22 +429,27 @@ printf( "WORK: |%lu jobs|  |%lu counter|\n", p_wrk->jobs, p_wrk->counter );
 
             // Create the pthread and save the pointer.
             memset( &((*(pp_tctx+i))->thread), 0, sizeof(pthread_t) );
-//            pthread_t* _p_thread = (pthread_t*)calloc( 1, sizeof(pthread_t) );
 
             int rc = pthread_create( &((*(pp_tctx+i))->thread), &tattr, thread_do_work, (*(pp_tctx+i))->p_work );
-//            int rc = pthread_create( _p_thread, &tattr, thread_do_work, (*(pp_tctx+i))->p_work );
-            if ( rc )  errx( 1, "Failed to create worker thread #%lu. Aborting.\n", i );
+            if ( rc )
+                errx( 1, "Failed to create worker thread #%lu. Aborting.\n", i );
 
             pthread_attr_destroy( &tattr );
-//            (*(pp_tctx+i))->p_thread = _p_thread;
         }
 
-        size_t amount_queued = 0;
+        // Keep the main thread alive while the threads do their work.
         while ( amount_generated < amount_to_generate || !amount_to_generate ) {
-//printf( "GENERATED: |%lu| / |%lu|\n", amount_generated, amount_to_generate );
             usleep( 10000 );
         }
-printf( "GENERATED: |%lu| / |%lu|\n", amount_generated, amount_to_generate );
+
+        // If the program gets here, clean up.
+        for ( size_t i = 0; i < worker_threads; i++ ) {
+            if ( NULL != *(pp_tctx+i) ) {
+                if ( NULL != (*(pp_tctx+i))->p_work )
+                    free( (*(pp_tctx+i))->p_work );
+                free( (void*)(*(pp_tctx+i)) );
+            }
+        }
     }
 
 
@@ -459,6 +466,7 @@ printf( "GENERATED: |%lu| / |%lu|\n", amount_generated, amount_to_generate );
 void* thread_do_work( void* p_work ) {
     thread_work_t* p_do = (thread_work_t*)p_work;
 
+    // If the jobs count is UINT64_MAX, this will go on forever.
     size_t howmany = p_do->jobs;
     while ( howmany ) {
         nanofuzz_data_t* p_data = Nanofuzz__get_next( p_do->p_fuzz_ctx );
@@ -472,7 +480,7 @@ void* thread_do_work( void* p_work ) {
         }
 
         Nanofuzz__delete_data( p_data );
-        howmany--;
+        if ( howmany < UINT64_MAX )  howmany--;
     }
 
     thread_update_amount( p_do->jobs );
@@ -481,7 +489,7 @@ void* thread_do_work( void* p_work ) {
 }
 
 
-// If the program is not running until infinity, decrement the amount counter until <= 0.
+// If the program is not running until infinity, increment the amount-generated counter.
 void thread_update_amount( size_t generated ) {
     pthread_mutex_lock( &_amount_mutex );
     amount_generated += generated;

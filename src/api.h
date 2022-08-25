@@ -21,7 +21,6 @@
 //   to be used externally.
 typedef fuzz_str_t nanofuzz_data_t;
 typedef fuzz_error_t nanofuzz_error_t;
-typedef gen_pool_type nanofuzz_pool_size;
 
 // Define a structure which encapsulates the parent factory and gen ctx.
 // This type is the primary type for interaction with nanofuzz (and stats in the future).
