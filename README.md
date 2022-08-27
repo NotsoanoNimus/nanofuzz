@@ -95,14 +95,14 @@ See the project **PATTERNS** document for more information regarding the nanofuz
 Null bytes are simple to generate within content. A single null byte in the pattern is represented by: `[0]`
 
 This can be useful when creating test strings to Base64-encode for BASIC authentication types/schemes,
-for example: `[a-z,A-Z,48-57,1-9]{1,32}[0][a-z,A-Z,48-57,1-9]{1,32}`
+for example: `[a-z,A-Z,0-9,\x01-\x09]{1,32}[0][a-z,A-Z,0-9,\x01-\x09]{1,32}`
 
 
 ## Algorithms
 
 For __random string generation__, nanofuzz uses the [Xoroshiro 256+](https://prng.di.unimi.it/#intro) PRNG algorithm,
 with a state vector initialized by a [Tiny Mersenne Twister 64](http://math.sci.hiroshima-u.ac.jp/m-mat/MT/TINYMT/index.html)
-implementation, which itself is seeded by the current time.
+implementation, which itself is seeded by the number of CPU cycles since the last reset (using `rdtsc`).
 
 No statistical tests have been run on the efficacy of this choice yet, but this will update when/if testing is done.
 
@@ -111,6 +111,6 @@ There is of course a possibility of this selection changing or being expanded to
 
 ## TODOs
 - [ ] Unicode or extended character supports for binary data outside of the standard ASCII byte-to-byte ranges.
-- [ ] Threaded generation using pthread.
+- [X] Threaded generation using pthread.
 - [ ] Detection of changed code-paths, or others methods by which nanofuzz can be compiled into a binary,
 similar to the well-known AFL tool.
