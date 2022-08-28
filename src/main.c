@@ -69,19 +69,7 @@ static void register_signal_handlers();
 static void handle_signal( int signal );
 static char* read_data_from_file( FILE* fp_file, bool gets_size );
 void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx );
-#ifdef DEBUG
-static void debug__print_hex( const char* p_dump_tag, const char* p_content, size_t len ) {
-    printf( "DEBUG: HEX of '%s':\n", p_dump_tag );
-    for ( size_t c = 0; c < len; c++ ) {
-        if ( c % 8 == 0 )  printf( "    " );
-        if ( c % 16 == 0 )  printf( "\n" );
-        printf( "%02X ", (unsigned char)*(p_content+c) );
-    }
-    printf( "\n\n" );
-}
-#else   /* DEBUG */
-static void debug__print_hex( const char* p_dump_tag, const char* p_content, size_t len ) {  }
-#endif   /* DEBUG */
+
 
 
 // Internal structure for providing spawned threads with information and 'work to do'.
@@ -376,7 +364,7 @@ int main( int argc, char* const argv[] ) {
                 if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
                     write_to_out_file( p_data, gen_num, pfx );
                 } else {
-                    //printf(  "%s\n", (const char*)(p_data->output)  );
+                    printf(  "%s\n", (const char*)(p_data->output)  );
                 }
             } else {
                 printf( "Content generation failure.\n" );

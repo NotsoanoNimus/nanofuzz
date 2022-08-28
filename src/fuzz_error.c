@@ -8,6 +8,8 @@
 
 #include "fuzz_error.h"
 
+#include <yallic.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,37 +33,35 @@ struct _fuzz_error_fragment_t {
 int Error__has_error( fuzz_error_t* p_err ) {
     if ( NULL != p_err )
         if ( NULL != p_err->p_fragments )
-            return (List__get_count( p_err->p_fragments ) > 0);
-//    return ( p_err && p_err->p_fragments && List__get_count( p_err->p_fragments ) > 0 );
+            return (List__length( p_err->p_fragments ) > 0);
+
     return 0;
 }
 
 
-// This is a _deep_ free on the Array List of error information.
+// This is a _deep_ free on the Array List of error information, using an iterator.
+static void __err_delete_action( void* p_data, void* p_input, void** pp_result ) {
+    if ( NULL != p_data ) {
+        struct _fuzz_error_fragment_t* p_frag = (struct _fuzz_error_fragment_t*)p_data;
+        if ( NULL != p_frag && NULL != p_frag->p_msg )
+            free( p_frag->p_msg );
+    }
+}
 void Error__delete( fuzz_error_t* p_err ) {
-    if ( p_err ) {
-        if ( p_err->p_fragments ) {
-            ListNode_t* x = List__get_head( p_err->p_fragments );
-            while ( NULL != x ) {
-                if ( x->node ) {
-                    if ( ((struct _fuzz_error_fragment_t*)(x->node))->p_msg ) {
-                        free( ((struct _fuzz_error_fragment_t*)(x->node))->p_msg );
-                    }
-                    free( x->node );
-                }
-                x = x->next;
-            }
-            // Don't do a delete here (the deep delete happens above(^)); just clear node-set.
-            List__clear( p_err->p_fragments );
-            free( p_err->p_fragments );
-            p_err->p_fragments = NULL;
-        }
-        free( p_err );
-        p_err = NULL;
+    if ( NULL != p_err ) {
+        List__for_each( p_err->p_fragments, NULL, NULL, &__err_delete_action, NULL );
+
+        List__delete_deep( &(p_err->p_fragments) );
+
+        free( p_err ); p_err = NULL;
     }
 }
 
 
+static void __err_print_action( void* p_data, void* p_input, void** pp_result ) {
+    struct _fuzz_error_fragment_t* p_msg = (struct _fuzz_error_fragment_t*)p_data;
+    fprintf(  (FILE*)p_input, "\t%s\n", p_msg->p_msg  );
+}
 void Error__print( fuzz_error_t* p_err, FILE* fp_to ) {
     if ( NULL == fp_to )  fp_to = stdout;
 
@@ -69,14 +69,7 @@ void Error__print( fuzz_error_t* p_err, FILE* fp_to ) {
         if ( NULL != p_err && NULL != p_err->p_fragments ) {
             fprintf( fp_to, "\n[FUZZ PATTERN ERROR: TRACE] Most Recent First\n" );
 
-            p_err->p_fragments = List__reverse( p_err->p_fragments );
-
-            ListNode_t* x = List__get_head( p_err->p_fragments );
-            while ( NULL != x ) {
-                fprintf( fp_to, "\t%s\n", ((struct _fuzz_error_fragment_t*)(x->node))->p_msg );
-                x = x->next;
-            }
-
+            List__for_each( p_err->p_fragments, NULL, (void*)fp_to, &__err_print_action, NULL );
             fprintf( fp_to, "\n\n" );
 
         } else  fprintf( fp_to, "\n[FUZZER ERROR] Unspecified problem.\n\n" );
@@ -97,14 +90,18 @@ fuzz_error_t* Error__new() {
 
 
 // Adds onto a pattern context's error trace.
-void Error__add( fuzz_error_t* p_err, size_t nest_level,
-    size_t pointer_loc, fuzz_error_code code, const char* p_msg )
-{
+void Error__add(
+    fuzz_error_t* p_err,
+    size_t nest_level,
+    size_t pointer_loc,
+    fuzz_error_code code,
+    const char* p_msg
+) {
     // Init if necessary.
     if ( NULL == p_err )  p_err = Error__new();
 
     // Don't do anything if the pseudo-stack-trace seems to be overflowing.
-    if ( List__get_count( p_err->p_fragments ) >= FUZZ_ERROR_MAX_NODES )  return;
+    if ( List__length( p_err->p_fragments ) >= FUZZ_ERROR_MAX_NODES )  return;
 
     // Allocate a new fragment to hold the error details.
     struct _fuzz_error_fragment_t* p_frag =
@@ -116,18 +113,20 @@ void Error__add( fuzz_error_t* p_err, size_t nest_level,
     // Account for the maximum length of the static string, plus some extra possible integer
     //   spacing (up to: 14 for Index and 4 for Err), then also add on the message length.
     char* static_err = "[Err 1234] [Nest 1] [Index 12345678901234] ";
-    char* p = (char*)calloc( (1+strlen(static_err)+strlen(p_msg)), sizeof(char) );
-    snprintf( p, (strlen(static_err)+strlen(p_msg)), "[Err %2u] [Nest %lu] [Index %3lu] %s",
-        code, nest_level, pointer_loc, p_msg );
-    *(p+strlen(static_err)+strlen(p_msg)) = '\0';   //paranoia
+    size_t req_len = (strlen(static_err) + strlen(p_msg));
+
+    char* p = (char*)calloc( (req_len + 1), sizeof(char) );
+
+    snprintf( p, req_len, "[Err %2u] [Nest %lu] [Index %3lu] %s", code,
+        nest_level, pointer_loc, p_msg );
+    *(p + req_len) = '\0';   //paranoia
 
     // Free the earlier dup'd string pointer to replace it with the full message in the buffer!
     free( p_frag->p_msg );
     p_frag->p_msg = p;
 
-    // Finally, add the fragment onto the error stack trace.
-    List__add_node( p_err->p_fragments, (void*)p_frag );
-
+    // Finally, add the fragment onto the end of the error stack trace.
+    List__add(  p_err->p_fragments, (void*)p_frag  );
 }
 
 

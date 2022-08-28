@@ -7,13 +7,13 @@
  */
 
 // TODO: Revisit and make this thread-safe
-#ifndef _FUZZ_FUZZ_ERROR_H
-#define _FUZZ_FUZZ_ERROR_H
+#ifndef NANOFUZZ_FUZZ_ERROR_H
+#define NANOFUZZ_FUZZ_ERROR_H
+
+#include <yallic.h>
 
 #include <stdio.h>
 #include <stdlib.h>
-
-#include "list.h"
 
 // Maximum string length of error fragments.
 #define FUZZ_ERROR_MAX_STRLEN 512
@@ -51,4 +51,4 @@ List_t* Error__get_fragments( fuzz_error_t* p_err );
 
 
 
-#endif   /* _FUZZ_FUZZ_ERROR_H */
+#endif   /* NANOFUZZ_FUZZ_ERROR_H */

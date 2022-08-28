@@ -1,6 +1,7 @@
 CC=gcc
-COMMONFLAGS=-g -Wall -lpthread
+COMMONFLAGS=-g -Wall
 CFLAGS=$(COMMONFLAGS) -O0 -DDEBUG
+LIBDEPEND=-lpthread -lyallic
 
 PROJNAME=nanofuzz
 
@@ -63,11 +64,11 @@ $(BINDIR):
 	-mkdir $(BINDIR)
 
 $(OBJ)/%.o: $(SRC)/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@ $(LIBDEPEND)
 
 $(BIN): $(OBJ) $(BINDIR) $(OBJS)
 	-rm $(BIN)
-	$(CC) $(CFLAGS) $(OBJS) -o $@
+	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LIBDEPEND)
 
 
 # TEST CASES. Creates the necessary folder structure for Criterion tests, and run them.
@@ -88,4 +89,4 @@ $(TESTOBJ)/%.o: $(TEST)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TESTBIN)/%: $(TESTOBJS)
-	$(CC) $(CFLAGS) $(TESTOBJS) -o $@ -l$(PROJNAME) -lcriterion
+	$(CC) $(CFLAGS) $(TESTOBJS) -o $@ -l$(PROJNAME) $(LIBDEPEND) -lcriterion

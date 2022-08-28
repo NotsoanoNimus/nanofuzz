@@ -1,0 +1,3 @@
+(thistestsonlyvariablesandcounts)<$NAME23>
+
+<@NAME23>{1,10}

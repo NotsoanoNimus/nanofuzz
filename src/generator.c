@@ -10,6 +10,7 @@
 #include "generator.h"
 #include "xoroshiro.h"
 
+#include <string.h>
 #include <time.h>
 
 
@@ -45,32 +46,24 @@ struct _fuzz_generator_context_t {
 
 
 
-// Inline method to look up a string as a hashtable value.
+// Inline method to look up a registered/indexed generator context based on a hashed string (label) value.
 static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t* p_ff, char* p_label ) {
-    // Using the 'djb2' hashing algorithm.
-//char* p_preserve = p_label;
+    // Using the 'djb2' hashing algorithm to get the 'hash'.
     unsigned long hash = 5381;
     int c;
     while ( (c = *p_label++) )
         hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-//printf( "HASH (%lu) for LABEL '%s'\n", hash, p_preserve );
 
     // Search the index opaquely for the hash. If found, return the pointer. Else, NULL.
-    void* p_scroll;
-    size_t i;
+    //   'Opaquely' here referring to the fact that this is iterating raw memory and is 'typeless'.
+    //   A 'shard' here is a word which needs some refactoring. It essentially means an index or
+    //   association between a string and a subcontext generator.
+    void* p_scroll = PatternFactory__get_shard_index_ptr( p_ff );
+    size_t i = 0;
     size_t struct_size = FuzzHash__sizeof();
-    for (
-        p_scroll = PatternFactory__get_shard_index_ptr( p_ff ), i = 0;
-        i < FUZZ_MAX_VARIABLES;
-        i++
-    ) {
-//printf("SCROLLGENGEN: (%p) (%lu) (%lu:%p)\n", p_scroll, struct_size, *((unsigned long*)(p_scroll + (i*struct_size))), *((fuzz_gen_ctx_t**)(p_scroll + (i*struct_size) + sizeof(unsigned long))) );
+    for ( ; i < FUZZ_MAX_VARIABLES; i++ ) {
         if (
-            0 == memcmp(
-                (p_scroll + (i*struct_size)),
-                &hash,
-                sizeof(unsigned long)
-            )
+            0 == memcmp(  (p_scroll + (i*struct_size)), &hash, sizeof(unsigned long)  )
         ) {
             // The value inside the private struct is a pointer, this is a pointer to that.
             //   Thus, a double-pointer is needed to dereference the genctx fully.
@@ -94,7 +87,7 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     if ( NULL == p_factory )  return NULL;
     if ( (gen_pool_type)NULL == type )  type = normal;
 
-    // Create the context and return it.
+    // Create the generator context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     x->type = type;
     x->p_factory = p_factory;
@@ -108,7 +101,8 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
     );
 
-    // Allocate initial state vector values.
+    // Allocate initial state vector values and counter pointers.
+    //   TODO: Why are these on the heap?
     for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ ) {
         *(((x->state).counter)+o) = (counter_t*)calloc( 1, sizeof(counter_t) );
     }

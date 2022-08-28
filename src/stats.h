@@ -6,10 +6,8 @@
  *
  */
 
-#ifndef _FUZZ_STATS_H
-#define _FUZZ_STATS_H
-
-#include "list.h"
+#ifndef NANOFUZZ_STATS_H
+#define NANOFUZZ_STATS_H
 
 
 
@@ -17,8 +15,4 @@ typedef struct _fuzz_stats_block_t* StatsBlockPtr_t;
 
 
 
-
-
-
-
-#endif   /* _FUZZ_STATS_H */
+#endif   /* NANOFUZZ_STATS_H */

@@ -9,7 +9,6 @@
 #define _FUZZ_PATTERN_H
 
 #include "fuzz_error.h"
-#include "list.h"
 
 #define NEW_PATTERN_BLOCK (fuzz_pattern_block_t*)calloc( 1, sizeof(fuzz_pattern_block_t) );
 

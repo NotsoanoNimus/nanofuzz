@@ -8,8 +8,12 @@
 #include "pattern.h"
 #include "generator.h"
 
-#include <ctype.h>
+#include <yallic.h>
+
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <errno.h>
 
@@ -67,10 +71,9 @@ struct _fuzz_ctx_t {
 // Some [important] local static functions.
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
-static int __branch_write_end( List_t** pp_seq, fuzz_branch_root_t* p_branch_root,
+static int __branch_write_end( List_t* p_seq, fuzz_pattern_block_t* p_branch_root_block,
     struct _fuzz_ctx_t* const p_ctx, int is_post_run );
-static size_t __search_branch_root_index( List_t** pp_seq, fuzz_branch_root_t* p_branch_root );
-static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards );
+static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* const ll_shards );
 
 
 
@@ -132,12 +135,17 @@ static inline struct _fuzz_ctx_t* const __Context__new() {
 
 // Destroy a context. This frees the context, error handler (if no errors), & tracker.
 static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
-    if ( p ) {
-        if ( p->p_nest_tracker )  free( p->p_nest_tracker );
+    if ( NULL != p ) {
+        if ( p->p_nest_tracker ) {
+            free( p->p_nest_tracker );
+            p->p_nest_tracker = NULL;
+        }
 
-        if (  p->p_err && 0 == Error__has_error( p->p_err )  ) {
+        if (  NULL != p->p_err && 0 == Error__has_error( p->p_err )  ) {
             Error__delete( p->p_err );
-            if ( pp_saveptr )  *pp_saveptr = NULL;
+
+            if ( NULL != pp_saveptr )
+                *pp_saveptr = NULL;
         }
 
         free( (void*)p );
@@ -148,14 +156,18 @@ static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t*
 
 // Compress the contents of a pattern block list into a single calloc and set it in the factory.
 static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
-    if ( NULL == p_list || List__get_count( p_list ) < 1 )  return NULL;
+    if (  NULL == p_list || List__length( p_list ) < 1  )  return NULL;
+
+    // Reverse the list (this is new due to FIXES of how list adding works). TODO: Fix this too.
+//    List__reverse( &p_list );
 
     // Fetch the list items count, calloc, set each cell, and create the factory.
     fuzz_factory_t* x = (fuzz_factory_t*)calloc( 1, sizeof(fuzz_factory_t) );
-    x->count = ( List__get_count( p_list ) + 1 );   // +1 for 'end' node
+    x->count = ( List__length( p_list ) + 1 );   // +1 for 'end' node
 
     // Create the new blob and start filling it out.
-    unsigned char* scroll = (unsigned char*)calloc( x->count, sizeof(fuzz_pattern_block_t) );
+    unsigned char* scroll = (unsigned char*)calloc(
+        x->count, sizeof(fuzz_pattern_block_t) );
 
     // Assign the node sequence to the created heap blob.
     x->node_seq = scroll;
@@ -163,26 +175,32 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     // Move data into the blob. Since the linked list implementation inserts the data like a stack,
     //   the list HEAD actually contains the final element. Therefore, the insertion into adjacent
     //   memory cells needs to happen in reverse.
-    scroll += ( x->count * sizeof(fuzz_pattern_block_t) );
+//    scroll += ( x->count * sizeof(fuzz_pattern_block_t) );
+
+    // Insert from the list
+    // TODO: Hacky; replace basically this whole compression statement and function with List__to_array
+    for (
+        size_t i = 0;
+        i < List__length( p_list )
+            && scroll <= (unsigned char*)(x->node_seq + (x->count * sizeof(fuzz_pattern_block_t)));
+        i++
+    ) {
+
+        fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(List__get_at( p_list, i ));
+
+        memcpy( scroll, p_x, sizeof(fuzz_pattern_block_t) );
+        scroll += sizeof(fuzz_pattern_block_t);
+    }
 
     // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
-    //   it encountered a terminal point. Scroll backwards one element, set it, and add it.
-    scroll -= sizeof(fuzz_pattern_block_t);
+    //   it encountered a terminal point.
+//    scroll += sizeof(fuzz_pattern_block_t);
     fuzz_pattern_block_t* p_end = (fuzz_pattern_block_t*)scroll;
     p_end->type = end;
     p_end->data = NULL;   // count and label don't matter, just the 'end' type
 
-    // Now insert from the list. This follows the list node pointer and raw-ly copies data.
-    //   Effectively, this means the list can be wholly discarded once this is done.
-    ListNode_t* y = List__get_head( p_list );
-    while ( NULL != y && scroll >= (unsigned char*)(x->node_seq) ) {
-        scroll -= sizeof(fuzz_pattern_block_t);
-        memcpy( scroll, y->node, sizeof(fuzz_pattern_block_t) );
-        y = y->next;
-    }
-
     // Return the built factory.
-    List__delete( p_list );
+    List__delete_deep( &p_list );
     return x;
 }
 
@@ -220,44 +238,57 @@ void* PatternFactory__get_shard_index_ptr( fuzz_factory_t* p_fact ) {
 
 
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
+static void __pf_delete_action( void* p_data, void* p_input, void** pp_results );
+
 void PatternFactory__delete( fuzz_factory_t* p_fact ) {
     if ( NULL == p_fact )  return;
 
     // We assume that any nodes/blocks in the node sequence have free-able memory in their
     //   data voidptr, so long as the value != null (such as 'end' blocks).
     fuzz_pattern_block_t* p_base_block = (fuzz_pattern_block_t*)(p_fact->node_seq);
+
     for ( size_t i = 0; i < p_fact->count; i++ ) {
         fuzz_pattern_block_t* x = (p_base_block + i);
-        if ( NULL != x && NULL != x->data )
+
+        if ( NULL != x && NULL != x->data ) {
             free( x->data );
+            x->data = NULL;
+        }
     }
 
     // Delete all the variables and factories attached as variables.
-    if ( p_fact->ref_shards ) {
-        ListNode_t* p_shard = List__get_head( p_fact->ref_shards );
+    if ( NULL != p_fact->ref_shards ) {
+        List__for_each( p_fact->ref_shards, NULL, NULL, &__pf_delete_action, NULL );
 
-        while ( NULL != p_shard ) {
-            if ( NULL != p_shard->node ) {
-                fuzz_gen_ctx_t* p_gen_ctx = ((fuzz_ref_shard_t*)(p_shard->node))->p_gen_ctx;
-                Generator__delete_context( p_gen_ctx );
-            }
-            p_shard = p_shard->next;
-        }
-
-        // Handle node and fuzz_ref_shard_t clean-up.
-        List__delete( p_fact->ref_shards );
+        List__delete_deep( &(p_fact->ref_shards) );
+        p_fact->ref_shards = NULL;
     }
 
     // Free the pattern_block blob.
-    if ( NULL != p_fact->node_seq )  free( p_fact->node_seq );
+    if ( NULL != p_fact->node_seq ) {
+        free( p_fact->node_seq );
+        p_fact->node_seq = NULL;
+    }
 
     // And free the factory itself.
     free( p_fact );
 }
 
+static void __pf_delete_action( void* p_data, void* p_input, void** pp_results ) {
+    if ( NULL != p_data ) {
+        fuzz_gen_ctx_t* p_gen_ctx = ((fuzz_ref_shard_t*)p_data)->p_gen_ctx;
+
+        Generator__delete_context( p_gen_ctx );
+        ((fuzz_ref_shard_t*)p_data)->p_gen_ctx = NULL;
+    }
+}
+
 
 
 // Explain step-by-step what the fuzz factory is doing to generate strings through the given factory.
+//   TODO: So much indirection here; review and refactor from a higher level.
+static void __pf_explain_action( void* p_data, void* p_input, void** pp_results );
+
 void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     if ( NULL == p_fact ) {
         fprintf( fp_stream, "The pattern factory is NULL.\n" );
@@ -265,23 +296,14 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     }
 
     // Recursively explain attached sub-factories.
-    if ( NULL != p_fact->ref_shards && List__get_count( p_fact->ref_shards ) > 0 ) {
-        fprintf( fp_stream, "@=@=@=@ Factory contains [%lu] associated sub-factories. @=@=@=@\n",
-            List__get_count( p_fact->ref_shards ) );
+    if (
+           NULL != p_fact->ref_shards
+        && List__length( p_fact->ref_shards ) > 0
+    ) {
+        fprintf(  fp_stream, "@=@=@=@ Factory contains [%lu] associated sub-factories. @=@=@=@\n",
+            List__length( p_fact->ref_shards )  );
 
-        ListNode_t* p_node_subfact = List__get_head( p_fact->ref_shards );
-        while ( NULL != p_node_subfact && NULL != p_node_subfact->node ) {
-            // Oh the joys of indirection and association
-            fuzz_factory_t* p_subfact = Generator__get_context_factory(
-                ((fuzz_ref_shard_t*)(p_node_subfact->node))->p_gen_ctx
-            );
-
-            fprintf( fp_stream, "\n===> Sub-factory '%s':\n",
-                ((fuzz_ref_shard_t*)(p_node_subfact->node))->label );
-            PatternFactory__explain( fp_stream, p_subfact );
-
-            p_node_subfact = p_node_subfact->next;
-        }
+        List__for_each( p_fact->ref_shards, NULL, fp_stream, &__pf_explain_action, NULL );
 
         fprintf( fp_stream, "\n\n" );
         fprintf( fp_stream, "********** Parent Factory **********\n" );
@@ -292,7 +314,9 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     // Iterate the factory nodes and explain each.
     for ( size_t i = 0; i < p_fact->count; i++ ) {
         // Get the target pattern block ptr.
-        fuzz_pattern_block_t* p = (fuzz_pattern_block_t*)(p_fact->node_seq + (i*sizeof(fuzz_pattern_block_t)));
+        fuzz_pattern_block_t* p
+            = (fuzz_pattern_block_t*)(p_fact->node_seq + (i*sizeof(fuzz_pattern_block_t)));
+
         if ( NULL == p ) {
             fprintf( fp_stream, "~~ Misunderstood pattern block at node '%lu'. This is problematic!\n", i );
             continue;
@@ -312,6 +336,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
 
         // Create a string describing the range of occurrence for the pattern object, if any.
         //   The longest range is 'XXXXX to YYYYY' (15 bytes - inc null-term).
+        //   TODO: what???
         char* p_range_str = (char*)calloc( 15, sizeof(char) );
         if ( p->count.single )
             snprintf( p_range_str, 15, "%d", p->count.base );
@@ -349,6 +374,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
             case string: {
                 fprintf( fp_stream, "Output static string: '%s' (%s times)\n",
                     (const char*)(p->data), p_range_str );
+
                 break;
             }
 
@@ -364,7 +390,8 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 char* scroll = p_range_expl;
 
                 for ( size_t i = 0; i < p_range->amount; i++ ) {
-                    snprintf( scroll, 13, "%3d to %3d, ", (p_range->fragments[i]).base, (p_range->fragments[i]).high );
+                    snprintf( scroll, 13, "%3d to %3d, ",
+                        (p_range->fragments[i]).base, (p_range->fragments[i]).high );
                     scroll += 12;
                 }
                 *(scroll - 2) = '\0';
@@ -379,12 +406,14 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
             case sub: {
                 fprintf( fp_stream, "vvv  Enter subsequence layer (nest tag %lu), which runs '%s' times.\n",
                     *((size_t*)(p->data)), p_range_str );
+
                 nest++;
                 break;
             }
             case ret: {
                 fprintf( fp_stream, "^^^  Repeat subsequence layer as applicable; goes '%lu' nodes back.\n",
                     *((size_t*)(p->data)) );
+
                 nest--;
                 break;
             }
@@ -397,7 +426,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 // This should never happen -- there are always at least two conditions in an OR.
                 //if(amount <= 1 )
                 // Each step is a uint16_t, so 65535 max (5 chars), plus comma and space (2 chars) = 7
-                // The final amount is the string 'or XYZXY' (8 chars)
+                // The final amount is the string 'or XYZXY' (8 chars), plus the favorite null-term.
                 size_t len = ((FUZZ_MAX_STEPS-1)*7)+8+1;
                 char* p_steps = (char*)calloc( len, sizeof(char) );
 
@@ -408,6 +437,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 *(p_steps+len-1) = '\0';   //paranoia
 
                 fprintf( fp_stream, "[BRANCH] Leap forward '%s' steps.\n", p_steps );
+
                 free( p_steps );
                 break;
             }
@@ -415,11 +445,13 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 // Jump label.
                 fprintf( fp_stream, "[BRANCH-END] Jump '%lu' steps ahead to exit branch.\n",
                     *((size_t*)(p->data)) );
+
                 break;
             }
 
             case end: {
                 fprintf( fp_stream, "!!! Stream end block (termination).\n" );
+
                 break;
             }
 
@@ -435,7 +467,23 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     }
 }
 
+static void __pf_explain_action( void* p_data, void* p_input, void** pp_results ) {
+    fuzz_factory_t* p_subfact =
+        Generator__get_context_factory(  ((fuzz_ref_shard_t*)p_data)->p_gen_ctx  );
 
+    fprintf(  (FILE*)p_input, "\n===> Sub-factory '%s':\n",
+        ((fuzz_ref_shard_t*)p_data)->label  );
+
+    PatternFactory__explain( (FILE*)p_input, p_subfact );
+}
+
+
+
+struct __pf_new_shards_pkg {
+    fuzz_factory_t* p_ff;
+    size_t counter;
+};
+static void __pf_new_shards( void* p_data, void* p_input, void** pp_results );
 
 // Build the fuzz factory. Since this is only intended to run as part of the
 //   wind-up cycle, optimization is not an essential concern here.
@@ -454,75 +502,72 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     List_t* ll_shards = List__new( FUZZ_MAX_VARIABLES );
 
     List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str, ll_shards );
+
     fuzz_factory_t* p_ff = __compress_List_to_factory( p_the_sequence );
 
-    if ( NULL != p_ff )
-        p_ff->ref_shards = ll_shards;
-    else
-        List__delete( ll_shards );
 
     // If any sub-factories are attached, index their labels into the shard_idx.
     // NOTE: This also replicates the pointer to shard_idx into each child factory.
     // TODO: Cleanup, consolidate, and consider turning the primary hashtable into a single alloc
-    if (
-           NULL != p_ff
-        && NULL != p_ff->ref_shards
-        && List__get_count( p_ff->ref_shards ) > 0
-    ) {
+    if (  NULL != p_ff && List__length( ll_shards ) > 0  ) {
+        struct __pf_new_shards_pkg _shard_pkg = { .p_ff = p_ff, .counter = 0 };
 
-        ListNode_t* p_shard = List__get_head( p_ff->ref_shards );
-
-        size_t count = 0;
-        while ( NULL != p_shard ) {
-            if ( NULL == p_shard->node )  continue;
-            _hash_to_gen_ctx_t* p_idx = (_hash_to_gen_ctx_t*)&(p_ff->shard_idx[count]);
-
-            fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)(p_shard->node);
-            char* p_label = &(p_ref->label[0]);
-
-            // Call the same minimalistic hash function used in the Generator file.
-            //   Using the 'djb2' hashing algorithm.
-//char* p_preserve = p_label;
-            unsigned long hash = 5381;
-            int c;
-            while ( (c = *p_label++) )
-                hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-//printf( "(%p) PATTERN HASH (%lu) for LABEL '%s' with gtx at '%p'\n", p_idx, hash, p_preserve, p_ref->p_gen_ctx );
-
-            p_idx->_hash = hash;
-            p_idx->_ctx  = p_ref->p_gen_ctx;
-
-            p_shard = p_shard->next;
-            count++;
-        }
-
-        // Replicate the reference hashtable into all subnodes.
-        count = 0;
-        p_shard = List__get_head( p_ff->ref_shards );
-        while ( NULL != p_shard ) {
-            if ( NULL == p_shard->node )  continue;
-            fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)(p_shard->node);
-
-            fuzz_factory_t* p_subfact = Generator__get_context_factory( p_ref->p_gen_ctx );
-            if ( NULL != p_subfact ) {
-                memcpy(
-                    &(p_subfact->shard_idx[count]),
-                    &(p_ff->shard_idx[count]),
-                    sizeof(_hash_to_gen_ctx_t)
-                );
-            }
-
-            p_shard = p_shard->next;
-            count++;
-        }
+        List__for_each( ll_shards, NULL, (void*)&_shard_pkg, &__pf_new_shards, NULL );
+        p_ff->ref_shards = ll_shards;
+    } else {
+        List__delete_deep( &ll_shards );
     }
+
 
     // Discard the context since a pointer to the err ctx is available.
     __Context__delete( p_ctx, pp_err );
 
 
+    // Return the factory.
     return p_ff;
+
 }
+
+static void __pf_new_shards( void* p_data, void* p_input, void** pp_results ) {
+        if ( NULL == p_data || NULL == p_input )  return;
+
+        struct __pf_new_shards_pkg* p_pkg = (struct __pf_new_shards_pkg*)p_input;
+        fuzz_factory_t* p_ff = p_pkg->p_ff;
+        size_t count = p_pkg->counter;
+
+        // The iterable type here is a ref_shard.
+        fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)p_data;
+        char* p_label = &(p_ref->label[0]);
+
+        // Call the same minimalistic hash function used in the Generator file.
+        //   Using the 'djb2' hashing algorithm.
+        unsigned long hash = 5381;
+        int c;
+        while ( (c = *p_label++) )
+            hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
+
+        // Use the computed label hash to create an association.
+        _hash_to_gen_ctx_t* p_idx = (_hash_to_gen_ctx_t*)&(p_ff->shard_idx[count]);
+        p_idx->_hash = hash;
+        p_idx->_ctx  = p_ref->p_gen_ctx;
+
+        // Get the generator context's associated Fuzz Factory.
+        //   Then replicate the parent factory's shard index to the sub-factory in the same index.
+        //   TODO: This hack is inefficient and gross. Can it be fixed?
+        fuzz_factory_t* p_subfact = Generator__get_context_factory( p_ref->p_gen_ctx );
+        if ( NULL != p_subfact ) {
+            printf( "Retrieved shard for index '%lu' with name '%s'.\n", count, &(p_ref->label[0]) );
+            memcpy(
+                &(p_subfact->shard_idx[count]),
+                &(p_ff->shard_idx[count]),
+                sizeof(_hash_to_gen_ctx_t)
+            );
+        }
+
+        // Increment the counter for the next iteration.
+        (p_pkg->counter)++;
+}
+
 
 
 // Define a set of functional or syntactically special characters.
@@ -546,7 +591,12 @@ static const char special_chars[] = "|\\[{(<>)}]";
 
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
-static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* ll_shards ) {
+static List_t* __parse_pattern(
+    struct _fuzz_ctx_t* const p_ctx,
+    const char* p_pattern,
+    List_t* const ll_shards
+) {
+
     size_t len, nest_level;
     const char* p;
     const char* p_lvl0_sub;   // see the '<' section for variable declarations
@@ -555,6 +605,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     // Self-describing flags for branching mechanisms. TODO: ew
     uint8_t is_branching = 0;
 
+    fuzz_pattern_block_t* p_branch_root_block = NULL;
     fuzz_branch_root_t* p_branch_root = NULL;
 
     len = strnlen( p_pattern, (FUZZ_MAX_PATTERN_LENGTH-1) );
@@ -565,12 +616,11 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     p_seq = List__new( FUZZ_MAX_PATTERN_LENGTH );
 
     // Let's go!
-//printf( "Parsing %lu bytes of input.\n", len );
+    //   TODO: Spaghetti. Need to refactor quite a few things here once the application is operational.
     for ( ; p < (p_pattern+len) && (*p); p++ ) {
-//printf( "READ: (%c) %02x\n", *p, *p );
+//printf( "READ(%lu) [%p]:  '%c'\n", p_ctx->nest_level, p, *p );
         fuzz_pattern_block_t* p_new_block = NULL;
 
-//TODO: Spaghetti. Need to refactor quite a few things here once the application is operational.
         switch ( *p ) {
 
             // None of these will ever be hit directly unless the character is _actually_ unexpected.
@@ -630,42 +680,27 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                 if ( 0 == is_branching ) {
                     // A new branch is starting since the lexer was not currently branching
+                    p_branch_root_block = p_new_block;
                     p_branch_root = (fuzz_branch_root_t*)calloc( 1, sizeof(fuzz_branch_root_t) ); //new root
                     p_new_block->data = p_branch_root;
                     p_new_block->type = branch_root;
-
-                    // Drop the previous node from the sequence, insert the branch root, and replace the prev.
-                    List_t* p_new = List__new( FUZZ_MAX_PATTERN_LENGTH );
-
-                    // --- Iterate the list and get the previous node in it.
-                    // --- Remember that the nodes are read from most-recent to least.
-                    ListNode_t* p_x = List__get_head( p_seq );
-
-                    while ( NULL != p_x ) {
-                        List__add_node( p_new, p_x->node );
-
-                        if ( ((fuzz_pattern_block_t*)(p_x->node)) == p_prev )
-                            List__add_node( p_new, p_new_block );
-
-                        p_x = p_x->next;
-                    }
-
-                    // Destroy the old list (shallow).
-                    List__clear( p_seq );
-                    free( p_seq );
-
-                    // Get the index of the root and make sure it was inserted.
-                    if (  List__index_of( p_new, p_new_block ) < 0  ) {
-                        FUZZ_ERR_IN_CTX( "There was a problem initializing the new branch '|' mechanism" );
-                    }
-
-                    // Need to reverse because the above add process creates a reversed ll.
-                    p_seq = List__reverse( p_new );
 
                     // The first pipe always auto-includes the first element as being 1 unit from the root.
                     //    Ex: (a|b) -> The lexer arrives to this code at '|' so the distance to 'a' is implicit.
                     p_branch_root->amount = 0;   //first one's on the house :)
                     p_branch_root->steps[0] = 1;
+
+                    // Add in the new branch root behind the most recent node.
+                    size_t loc = List__index_of( p_seq, p_prev );
+
+                    if (  -1 == List__add_at( p_seq, p_new_block, loc )  ) {
+                        FUZZ_ERR_IN_CTX( "Failed to add a branch '|' root to the node sequence" );
+                    }
+
+                    // Get the index of the root and make sure it was inserted.
+                    if (  List__index_of( p_seq, p_new_block ) < 0  ) {
+                        FUZZ_ERR_IN_CTX( "Problem initializing the new branch '|' mechanism" );
+                    }
 
                     // Init the new block.
                     p_new_block = NEW_PATTERN_BLOCK;
@@ -690,7 +725,6 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 if ( NULL == end ) {
                     FUZZ_ERR_IN_CTX( "Pattern contains unclosed or empty variable statement '<>'" );
                 }
-
                 const char* start = p+1;   // set start to the first character.
 
                 // Make sure the variable name referenced is 1-8 chars. This doesn't count
@@ -754,15 +788,14 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                         // NOTE: While <$XYZ> _can_ follow a range mechanism, the range will simply be ignored.
                         //       This is the same as the ability to chain ranges but keep the final one.
                         // TODO: ^ Fix by setting the nest_level ptr to NULL when a range is applied??
-                        ListNode_t* p_ret_node = List__get_head( p_seq );
-                        fuzz_pattern_block_t* p_ret = (p_ret_node && p_ret_node->node)
-                            ? ((fuzz_pattern_block_t*)(p_ret_node->node))
-                            : NULL;
+                        void* p_last = List__get_last( p_seq );
+                        fuzz_pattern_block_t* p_ret = (NULL != p_last) ? (fuzz_pattern_block_t*)p_last : NULL;
 
-                        if (
+                        if (   // kill me
                                ( NULL == *((p_ctx->p_nest_tracker)+nest_level) )
                             || ( sub != (*((p_ctx->p_nest_tracker)+nest_level))->type )
-                            || ( !p_ret || !(p_ret->data) )
+                            || NULL == p_ret
+                            || NULL == p_ret->data
                             || ( ret != p_ret->type )
                         ) {
                             VAR_ERR( "Declarations '<$...>' can only be applied to subsequence '()' mechanisms" );
@@ -776,24 +809,32 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                         }
 
                         // Ensure a variable by this explicit name doesn't already exist on the current factory.
-                        fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_node(
-                            ll_shards, 0, p_varname, strlen(p_varname) );
+                        for ( size_t i = 0; i < List__length( ll_shards ); i++ ) {
+                            fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_at( ll_shards, i );
 
-                        if ( NULL != p_shard ) {
-                            VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
+                            if ( NULL != p_shard ) {
+                                if ( 0 == strcmp( p_varname, &(p_shard->label[0]) )  ) {
+                                    VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
+                                }
+                            }
                         }
 
                         // Another check: throw an error if this declaration exceeds the arraylist limitation.
                         //   TODO: Fix static '16' in this string
-                        if ( List__get_count( ll_shards ) >= FUZZ_MAX_VARIABLES ) {
+                        if ( List__length( ll_shards ) >= FUZZ_MAX_VARIABLES ) {
                             VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 16." );
                         }
 
                         // The count of list items to be deleted lives in the data of the 'ret' pattern
                         //   block, +1 for the 'ret' itself, and ultimately +1 for the preceding 'sub' block.
-                        for ( size_t del = (*((size_t*)(p_ret->data)) + 2); del > 0; del-- )
-                            List__drop_node(  p_seq, List__get_head( p_seq )  );
+                        for ( size_t del = (*((size_t*)(p_ret->data)) + 2); del > 0; del-- ) {
+                            void* p_popped = List__remove_last( p_seq );
 
+                            // It should be OK to free these resources since the new variable declaration
+                            //   is spawning a totally separate pattern factory with separate allocations.
+                            if ( NULL != p_popped )
+                                free( p_popped );
+                        }
 
                         // Create the new factory.
                         fuzz_error_t* p_err = NULL;
@@ -817,7 +858,7 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                             strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
                         p_fs->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
 
-                        List__add_node( ll_shards, p_fs );
+                        List__add( ll_shards, p_fs );
 
 
                         // All done here.
@@ -831,10 +872,19 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                     case '*' :
                     case '%' : {
                         // Check whether the variable name exists in the ll_shards linked list.
-                        fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_node(
-                            ll_shards, 0, p_varname, strlen(p_varname) );
+                        //   TODO: HACKY!
+                        void* p_x = NULL;
+                        for ( size_t i = 0; i < List__length( ll_shards ); i++ ) {
+                            fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_at( ll_shards, i );
 
-                        if ( NULL == p_shard ) {
+                            if ( NULL != p_shard ) {
+                                if ( 0 == strcmp( p_varname, &(p_shard->label[0]) )  ) {
+                                    p_x = p_shard;
+                                }
+                            }
+                        }
+
+                        if ( NULL == p_x ) {
                             VAR_ERR( "Variable references '<@...>' an undeclared variable name" );
                         }
 
@@ -868,7 +918,8 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                     if ( p_varname )  free( p_varname );
                     if ( p_ref )  free( p_ref );
 
-                    if ( NULL != p_lvl0_sub )  free( (void*)p_lvl0_sub );
+                    if ( NULL != p_lvl0_sub )
+                        free( (void*)p_lvl0_sub );
                     p_lvl0_sub = NULL;
 
                     FUZZ_ERR_IN_CTX( p_errmsg );
@@ -988,18 +1039,21 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // Create the sub block and continue the necessary recursion.
                 //   'sub' is essentially just a marker for 'ret', which points to it
                 p_new_block = NEW_PATTERN_BLOCK;
-                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                 p_new_block->type = sub;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
 
                 // Set the content of the sub's data to the length of its members.
                 size_t* p_lvl = (size_t*)calloc( 1, sizeof(size_t) );
                 *p_lvl = nest_level;
                 p_new_block->data = p_lvl;
 
-                (p_new_block->count).single = 1;
-                (p_new_block->count).base = 1;
-                List__add_node( p_seq, p_new_block );
-                p_new_block = NULL;   //this should be done to prevent double-frees
+                if (  -1 == List__add( p_seq, p_new_block )  ) {
+                    FUZZ_ERR_IN_CTX( "Subsequence '()' failed to add onto the factory node chain" );
+                }
+
+                p_new_block = NULL;   //this should be done to prevent double-frees or dangles
 
 
                 //// RECURSION: Prepare a new substring and parse it anew.
@@ -1007,8 +1061,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
                 // --- If the nest_level is zero, save the sub string as applicable for vars.
                 //     The ptr is only ever NULL when the old resource was already freed.
-                if ( NULL != p_lvl0_sub )  free( (void*)p_lvl0_sub );
-                if ( 0 == nest_level ) p_lvl0_sub = strdup( p_sub );
+                if ( NULL != p_lvl0_sub )
+                    free( (void*)p_lvl0_sub );
+                if ( 0 == nest_level )
+                    p_lvl0_sub = strdup( p_sub );
 
                 (p_ctx->nest_level)++;   // increase the nest level and enter
                 List_t* p_pre = __parse_pattern( p_ctx, p_sub, ll_shards );
@@ -1016,29 +1072,29 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 free( p_sub );
 
                 // Make sure the returned list has some nodes. If not, problem.
-                if ( NULL == p_pre || List__get_count( p_pre ) < 1 ) {
-                    if ( NULL != p_pre )  List__delete( p_pre );
+                if (  NULL == p_pre || List__length( p_pre ) < 1  ) {
+                    if (  List__length( p_pre ) > 0  )
+                        List__delete_deep( &p_pre );
                     FUZZ_ERR_IN_CTX( "Invalid, empty, or NULL branch inside Subsequence '()' statement" );
                 }
+
                 // Also ensure the returned list doesn't end with a branch. Remember, HEAD is last node.
-                ListNode_t* p_lhead = List__get_head( p_pre );
-                if ( NULL != p_lhead ) {
-                    fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(p_lhead->node);
-                    if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
-                        if ( NULL != p_pre )  List__delete( p_pre );
-                        FUZZ_ERR_IN_CTX( "Subsequence '()' statements cannot end with branch '|' mechanisms" );
-                    }
+                fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(List__get_last( p_pre ));
+                if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
+                    if (  List__length( p_pre ) > 0  )
+                        List__delete_deep( &p_pre );
+                    FUZZ_ERR_IN_CTX( "Subsequence '()' statements cannot end with branch '|' mechanisms" );
                 }
 
                 // At this point, essentially linearly staple the output of the sub in memory.
-                //   Since this list is only used for reversing, be sure to delete it later.
-                List_t* x = List__reverse( p_pre );
-                for ( ListNode_t* y = List__get_head( x ); y; y = y->next )
-                    List__add_node( p_seq, y->node );
+                if (  -1 == List__extend( p_seq, p_pre )  ) {
+                    if (  List__length( p_pre ) > 0  )
+                        List__delete_deep( &p_pre );
+                    FUZZ_ERR_IN_CTX( "Subsequence '()' mechanism failed to add onto the instruction set" );
+                }
 
-                size_t rev_size = List__get_count( x );
-                List__clear( x );
-                free( x );
+                size_t rev_size = List__length( p_pre );
+                List__delete_shallow( &p_pre );
 
                 // Create the ret node and point it back to 'p_new_block'.
                 fuzz_pattern_block_t* p_ret = NEW_PATTERN_BLOCK;
@@ -1109,8 +1165,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
         }
 
         // Add the (maybe-)populated node onto the list and continue;
-        if ( p_new_block ) {
-            List__add_node( p_seq, p_new_block );
+        if ( NULL != p_new_block ) {
+            if (  -1 == List__add( p_seq, p_new_block )  ) {
+                FUZZ_ERR_IN_CTX( "Failed to add the pattern block onto the factory sequence" );
+            }
 
             // Doesn't matter where or when, if current branch mark is '2' then update branch_root.
             //   A value of '2' indicates a block coming directly after a '|'.
@@ -1118,37 +1176,34 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
                 // Increment and check bound.
                 (p_branch_root->amount)++;
                 if ( p_branch_root->amount > FUZZ_MAX_STEPS ) {
-                    ListNode_t* x = List__drop_node(  p_seq, List__get_head( p_seq )  );
-                    if ( x )  free( x );
+                    void* p_most_recent = List__remove_last( p_seq );
+                    if ( NULL != p_most_recent )
+                        free( p_most_recent );
+
                     FUZZ_ERR_IN_CTX( "Branches '|' cannot exceed the precompiled limit."
                         " Consider simplifying your pattern" );
                 }
 
                 fuzz_pattern_block_t* p_curr = *((p_ctx->p_nest_tracker)+nest_level);
 
-                // Compute the distance from the end of the list (COUNT), minus the most recently
-                //   added block (-1), minus the 0-based index from the node_seq start of the root,
-                //   minus the index of the most recent 'sub' block (if this is an iter for a sub).
-                // COUNT - 1 - IDX(root) - (p_curr ? IDX(curr) : 0)
-                // TODO: Could this be '0 + ForwardIndex(root) - 1' where FWIDX is the NOT REV IDX?
-                size_t delta = (
-                    List__get_count( p_seq )
-                    - 1
-                    - __search_branch_root_index( &p_seq, p_branch_root )
-                    - (
-                        (NULL != p_curr && sub == p_curr->type)
-                        * List__index_of( p_seq, p_curr )
-                    )
-                );
+                int track_index = List__index_of( p_seq, p_curr );
+                int root_index = List__index_of( p_seq, p_branch_root_block );
+
+                if ( track_index <= root_index || -1 == root_index ) {
+                    FUZZ_ERR_IN_CTX( "Branch '|' encountered an unexpected indexing problem." );
+                }
+
+                // Get the distance from the branch-root node to the most recently-added node
+                //   and set it as the interval to use on the branch root's table.
+                size_t delta = track_index - root_index;
                 p_branch_root->steps[p_branch_root->amount] = (unsigned short)(delta & 0xFFFF);
 
             } else if ( 1 == is_branching ) {
                 // Go back and mark the branch jmp types with the proper distance from this node.
-                if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx, 0 )  ) {
-                    p_seq = List__reverse( p_seq );   //the inner method reverses
-
-                    ListNode_t* x = List__drop_node(  p_seq, List__get_head( p_seq )  );
-                    if ( x )  free( x );
+                if (  !__branch_write_end( p_seq, p_branch_root_block, p_ctx, 0 )  ) {
+                    void* p_most_recent = List__remove_last( p_seq );
+                    if ( NULL != p_most_recent )
+                        free( p_most_recent );
 
                     FUZZ_ERR_IN_CTX( "Problem closing branch '|' mechanism" );
                 }
@@ -1163,8 +1218,10 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
 
 
         __err_exit:
-            if ( p_new_block )
+            if ( NULL != p_new_block ) {
                 free( p_new_block );
+                p_new_block = NULL;
+            }
 
             if ( NULL != p_lvl0_sub ) {
                 free ( (void*)p_lvl0_sub );
@@ -1174,9 +1231,11 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
             // Even on crashes, collate the list so its contents can be deleted properly.
             fuzz_factory_t* x = __compress_List_to_factory( p_seq );
             PatternFactory__delete( x );
-
             return NULL;
     }
+
+    // Ready an error message pointer if needed.
+    char* p_err_msg = NULL;
 
     // If the pattern was still in a branch, close it out.
     //   This happens in cases such as 'staticstr,a|b|c' where at the ending 'c'
@@ -1184,55 +1243,45 @@ static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_p
     //   it will become '1', which doesn't give the opportunity for the 'else-if'
     //   above to run for that branch.
     if ( is_branching > 0 ) {
-        if (  !__branch_write_end( &p_seq, p_branch_root, p_ctx, 1 )  ) {
-            Error__add(
-                p_ctx->p_err,
-                p_ctx->nest_level,
-                (p-p_pattern),
-                FUZZ_ERROR_INVALID_SYNTAX,
-                "Problem closing branch '|' mechanism"
-            );
-
-            // Attempt to clean up.
-            fuzz_factory_t* x = __compress_List_to_factory( p_seq );
-            PatternFactory__delete( x );
-            return NULL;
+        if (  !__branch_write_end( p_seq, p_branch_root_block, p_ctx, 1 )  ) {
+            p_err_msg = "Problem closing branch '|' mechanism";
+            goto __err_post_loop;
         }
         is_branching = 0;
     }
 
     // Free this meta-tracker if it's still lingering.
-    if ( NULL != p_lvl0_sub )
+    if ( NULL != p_lvl0_sub ) {
         free ( (void*)p_lvl0_sub );
+        p_lvl0_sub = NULL;
+    }
 
     // Also ensure the returned list doesn't end with a branch. Remember, HEAD is last node.
-    ListNode_t* p_lhead = List__get_head( p_seq );
-    if ( NULL != p_lhead ) {
-        fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(p_lhead->node);
-
-        if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
-            Error__add(
-                p_ctx->p_err,
-                p_ctx->nest_level,
-                (p-p_pattern),
-                FUZZ_ERROR_INVALID_SYNTAX,
-                "The input pattern cannot end with branch '|' mechanisms"
-             );
-
-            // Attempt to clean up.
-            fuzz_factory_t* x = __compress_List_to_factory( p_seq );
-            PatternFactory__delete( x );
-            return NULL;
-        }
+    fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(List__get_last( p_seq ));
+    if ( branch_root == p_x->type || branch_jmp == p_x->type ) {
+        p_err_msg = "The input pattern cannot end with branch '|' mechanisms";
+        goto __err_post_loop;
     }
 
     // Return the linked list representing the sequence of generation.
-    if ( List__get_count( p_seq ) > 0 ) {
+    if (  List__length( p_seq ) > 0  ) {
         return p_seq;
     } else {
-        if ( NULL != p_seq )  List__delete( p_seq );
+        if ( NULL != p_seq )
+            List__delete_deep( &p_seq );
+
         return NULL;
     }
+
+    // Called on errors that occur after the main construction loop.
+    __err_post_loop:
+        // Log the factory error.
+        Error__add(  p_ctx->p_err, p_ctx->nest_level,
+            (p-p_pattern), FUZZ_ERROR_INVALID_SYNTAX, p_err_msg  );
+        // Attempt to clean up.
+        fuzz_factory_t* x = __compress_List_to_factory( p_seq );
+        PatternFactory__delete( x );
+        return NULL;
 }
 
 
@@ -1525,7 +1574,7 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
         //   perfectly valid if someone is masochistic enough, but not [1-2,2-3,3-4,...]
         for ( size_t i = 0; i < (amount-1); i++ ) {
             fuzz_repetition_t* p_shard = &(p_range->fragments[i]);
-            if ( !p_shard )  continue;
+            if ( NULL == p_shard )  continue;
 //printf( "-- SHARD: |%d|-|%d|\n\tFRAG: |%d|-|%d|\n", p_shard->base, p_shard->high, frag.base, frag.high );
 
             if (
@@ -1640,32 +1689,27 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
 
 // Terminate the current branch and back-fill the jmp nodes.
 static int __branch_write_end(
-    List_t** pp_seq,
-    fuzz_branch_root_t* p_branch_root,
+    List_t* p_seq,
+    fuzz_pattern_block_t* p_branch_root_block,
     struct _fuzz_ctx_t* const p_ctx,
     int is_post_run
 ) {
-//printf( "NLVL (%lu) / PCTX (%d)\n", (p_ctx ? p_ctx->nest_level : -1), (NULL != p_ctx) );
-    // Reverse the input list so that when iterating from the list head to tail,
-    //   the branch root is encountered first before its jmps.
-    *pp_seq = List__reverse( *pp_seq );
+printf( "P1 |%d|\n", is_post_run );
+    // Preliminary checks.
+    if ( NULL == p_ctx || NULL == p_branch_root_block || NULL == p_seq )  return 0;
 
-    // Start from the base of the list and seek the branch_root target.
-    ListNode_t* p_lroot = List__get_head( *pp_seq );
-    while ( NULL != p_lroot ) {
-        if ( NULL != p_lroot->node ) {
-            if ( p_branch_root == ((fuzz_pattern_block_t*)(p_lroot->node))->data ) {
-                break;
-            }
-        }
-        p_lroot = p_lroot->next;
-    }
+    // Get the branch root data from the block.
+    fuzz_branch_root_t* p_branch_root =
+        ((fuzz_branch_root_t*)(p_branch_root_block->data));
+    if ( NULL == p_branch_root )  return 0;
 
-    // If the node (somehow) wasn't found, or the found node isn't a root, fail.
-    if (
-           NULL == p_lroot
-        || branch_root != ((fuzz_pattern_block_t*)(p_lroot->node))->type
-    )  return 0;
+    // Get the index of the branch root so relative operations can be done on the branch.
+    int root_index = List__index_of( p_seq, p_branch_root_block );
+    if ( -1 == root_index )  return 0;
+
+    // Shorten the wooly name of the tracked node.
+    fuzz_pattern_block_t* p_track_block =
+        *((p_ctx->p_nest_tracker)+(p_ctx->nest_level));
 
     // Now need to seek the distance up to one of two points:
     //   1. The end of the linked list of pattern blocks (up to the most recent instruction).
@@ -1674,68 +1718,42 @@ static int __branch_write_end(
     //       distance to the 'end' starts at the BEGINNING of the sub, not the ending 'ret'
     //       after the recursion appends all the sub-items.
     //         EX: a|b|c(defg) --> |a.b.c+ rather than |a.b.c(defg[ret]+
-    ListNode_t* p_ltmp = p_lroot->next;
-    size_t dist_to_end = 0;
 
-    fuzz_pattern_block_t* p_prev = p_ctx
-        ? *((p_ctx->p_nest_tracker)+(p_ctx->nest_level))
-        : NULL;
-    void* p_lend = ( p_prev && sub == p_prev->type ) ? p_prev : NULL;
-//printf("--- |%p|\n", p_lend);
+    // Get the most recently-tracked block per the nest-level, or the final list nodes' index.
+    int last_pattern_block = List__index_of( p_seq, p_track_block );
+    if ( -1 == last_pattern_block )
+        last_pattern_block = (List__length( p_seq ) - 1);
 
-    // Seek the distance per the above comment.
-    while ( NULL != p_ltmp && p_lend != p_ltmp->node ) {
-        dist_to_end++;
-        p_ltmp = p_ltmp->next;
-    }
-//printf("--- DIST |%lu|\n", dist_to_end);
+    // Bounds checking.
+    if ( last_pattern_block <= root_index )  return 0;
 
     // Automatically skip index 0 (the implicit '1' branch) and for each branch, slide
-    //   up to the branch location, minus 1, to land on the branch_jmp.
+    //   up to the branch location for each branch, minus 1, to land on the branch_jmp node.
     for ( size_t i = 1; i <= p_branch_root->amount; i++ ) {
-        ListNode_t* p_lnode = p_lroot;
+        if ( 0 == p_branch_root->steps[i] )  return 0;
 
-        unsigned short move =  p_branch_root->steps[i] - 1;
-        for ( size_t t = move; t; t-- )  p_lnode = p_lnode->next;
+        unsigned short move = p_branch_root->steps[i] - 1;
 
-        // If the block is a JMP, set its jmp size; else, error.
-        //   The jmp size depends on the difference between the current location from
-        //   root ('move') and the distance to the end of the list in its current state.
-        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lnode->node);
-        if ( branch_jmp == p_block->type ) {
-            // Add 1 if inside a sub, since the trailing 'ret' is the jmp target, not simply
-            //   the end of the nodes list.
-            // TODO: Revisit and THOROUGHLY test. Why does this work exactly?
-            *((size_t*)(p_block->data)) = (dist_to_end - move +
-                (sub == p_prev->type || (0 != p_ctx->nest_level && is_post_run)));
-        } else  return 0;
+        //printf( "--- %d,%d,%hu,%hu\n", root_index, last_pattern_block, move, p_branch_root->steps[i] );
+        void* _p_block = List__get_at(  p_seq, (root_index + move)  );
+        if ( NULL == _p_block )  return 0;
+
+        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)_p_block;
+        if ( branch_jmp != p_block->type )  return 0;
+
+        // Set the amount for the jmp. The position of the jmp block is (root_index+move),
+        //   so really we only need to get the position to the end of the current list since this
+        //   function is called _AS THE LIST IS CONSTRUCTING_. This value must be incremented
+        //   once if this is a post-run (because the final jmp-to block such as 'end' or 'ret' has
+        //   not yet been added onto the list.
+        *((size_t*)(p_block->data)) = (
+            (List__length( p_seq ) - 1)
+            - (root_index + move)
+            + is_post_run
+            //last_pattern_block - root_index - move + is_post_run
+        );
     }
 
-    // OK. Reorient the linked list and return success.
-    *pp_seq = List__reverse( *pp_seq );
+    // OK. Return success.
     return 1;
-}
-
-
-// Find a branch root in a list (pointer hell).
-static size_t __search_branch_root_index( List_t** pp_seq, fuzz_branch_root_t* p_branch_root ) {
-    if ( NULL == pp_seq || NULL == *pp_seq || NULL == p_branch_root )  return 0;
-
-    *pp_seq = List__reverse( *pp_seq );
-
-    ListNode_t* p_lhead = List__get_head( *pp_seq );
-    while ( NULL != p_lhead ) {
-        fuzz_pattern_block_t* p_block = (fuzz_pattern_block_t*)(p_lhead->node);
-
-        if ( p_branch_root == p_block->data ) {
-            size_t i = List__index_of( *pp_seq, p_block );
-            *pp_seq = List__reverse( *pp_seq );
-            return i;
-        }
-
-        p_lhead = p_lhead->next;
-    }
-
-    *pp_seq = List__reverse( *pp_seq );
-    return 0;
 }
