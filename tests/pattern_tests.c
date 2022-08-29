@@ -37,7 +37,7 @@
         cr_assert( NULL != p_ctx, "The nanofuzz context is not valid for this input." ); \
         nanofuzz_data_t* p_data = Nanofuzz__get_next( p_ctx ); \
         cr_assert( NULL == p_data, "Generator must crash for this test." ); \
-        Nanofuzz__delete_data( p_data ); \
+        Nanofuzz__delete_data( p_ctx, p_data ); \
         Nanofuzz__delete( p_ctx ); \
     }
 
