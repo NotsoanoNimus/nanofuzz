@@ -14,8 +14,6 @@
 struct _fuzz_global_context_t {
     fuzz_factory_t* _p_parent_factory;
     fuzz_gen_ctx_t* _p_gen_ctx;
-//    fuzz_error_t* _p_err_ctx;
-//    List_t* _generated_data;
 };
 
 
@@ -63,10 +61,19 @@ nanofuzz_data_t* Nanofuzz__get_next( nanofuzz_context_t* p_ctx ) {
 
 // Free generated nanofuzz data. This is a simple wrspper and we leave leak tracking up
 //   to the implementer of the API since DATA blobs are context-independent.
-void Nanofuzz__delete_data( nanofuzz_data_t* p_data ) {
+void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data ) {
     if ( NULL != p_data ) {
-        if ( NULL != p_data->output )
+        if ( NULL != p_data->output ) {
             free( (void*)p_data->output );
+            p_data->output = NULL;
+        }
+
+        // Prevent dangling pointers on the context where applicable.
+        if (
+               NULL != p_ctx
+            && NULL != p_ctx->_p_gen_ctx
+            && p_data == Generator__get_most_recent( p_ctx->_p_gen_ctx )  )
+            Generator__flush_most_recent( p_ctx->_p_gen_ctx );
 
         free( p_data );
     }

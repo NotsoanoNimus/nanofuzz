@@ -371,7 +371,7 @@ int main( int argc, char* const argv[] ) {
                 exit(1);
             }
 
-            Nanofuzz__delete_data( p_data );
+            Nanofuzz__delete_data( p_fuzz_ctx, p_data );
             if ( amount_to_generate )  i++;
 
             // I mean really, this shouldn't happen but.....
@@ -456,18 +456,21 @@ void* thread_do_work( void* p_work ) {
 
     // If the jobs count is UINT64_MAX, this will go on forever.
     size_t howmany = p_do->jobs;
-    while ( howmany ) {
+    while ( howmany > 0 ) {
         nanofuzz_data_t* p_data = Nanofuzz__get_next( p_do->p_fuzz_ctx );
         if ( NULL != p_data ) {
             if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
-                 write_to_out_file( p_data,
-                    (p_do->counter + (p_do->jobs - howmany)), p_do->pfx );
+                 write_to_out_file(
+                    p_data,
+                    (p_do->counter + (p_do->jobs - howmany)),
+                    p_do->pfx
+                );
             } else {
                 //printf(  "%s\n", (const char*)(p_data->output)  );
             }
         }
 
-        Nanofuzz__delete_data( p_data );
+        Nanofuzz__delete_data( p_do->p_fuzz_ctx, p_data );
         if ( howmany < UINT64_MAX )  howmany--;
     }
 

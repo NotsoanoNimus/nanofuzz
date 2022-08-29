@@ -65,6 +65,10 @@ void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to );
 
 // Resize a generator's data pool to the new ctx type.
 void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type );
+// Get the pointer of the most recently generated data-stream for a context.
+fuzz_str_t* Generator__get_most_recent( fuzz_gen_ctx_t* p_ctx );
+// Flush the pointer of the most recently generated data-stream (to NULL) for a context.
+void Generator__flush_most_recent( fuzz_gen_ctx_t* p_ctx );
 
 // Return the factory used by a gen ctx.
 fuzz_factory_t* Generator__get_context_factory( fuzz_gen_ctx_t* p_ctx );

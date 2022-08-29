@@ -6,6 +6,6 @@
         )
     ){1,64}
 )<$VERSION>
-
+<%VERSION>
 
 https://somesite.com/cgi-bin/WebObjects-4<@VERSION>4.exe/AppName.woa/1/wa/default

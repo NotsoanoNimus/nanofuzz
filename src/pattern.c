@@ -156,10 +156,11 @@ static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t*
 
 // Compress the contents of a pattern block list into a single calloc and set it in the factory.
 static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
-    if (  NULL == p_list || List__length( p_list ) < 1  )  return NULL;
-
-    // Reverse the list (this is new due to FIXES of how list adding works). TODO: Fix this too.
-//    List__reverse( &p_list );
+    if (  NULL == p_list )  return NULL;
+    if (  List__length( p_list ) < 1  ) {
+        List__delete_deep( &p_list );
+        return NULL;
+    }
 
     // Fetch the list items count, calloc, set each cell, and create the factory.
     fuzz_factory_t* x = (fuzz_factory_t*)calloc( 1, sizeof(fuzz_factory_t) );
@@ -172,11 +173,6 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     // Assign the node sequence to the created heap blob.
     x->node_seq = scroll;
 
-    // Move data into the blob. Since the linked list implementation inserts the data like a stack,
-    //   the list HEAD actually contains the final element. Therefore, the insertion into adjacent
-    //   memory cells needs to happen in reverse.
-//    scroll += ( x->count * sizeof(fuzz_pattern_block_t) );
-
     // Insert from the list
     // TODO: Hacky; replace basically this whole compression statement and function with List__to_array
     for (
@@ -185,7 +181,6 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
             && scroll <= (unsigned char*)(x->node_seq + (x->count * sizeof(fuzz_pattern_block_t)));
         i++
     ) {
-
         fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(List__get_at( p_list, i ));
 
         memcpy( scroll, p_x, sizeof(fuzz_pattern_block_t) );
@@ -194,7 +189,6 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
 
     // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
     //   it encountered a terminal point.
-//    scroll += sizeof(fuzz_pattern_block_t);
     fuzz_pattern_block_t* p_end = (fuzz_pattern_block_t*)scroll;
     p_end->type = end;
     p_end->data = NULL;   // count and label don't matter, just the 'end' type
@@ -515,6 +509,8 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
         List__for_each( ll_shards, NULL, (void*)&_shard_pkg, &__pf_new_shards, NULL );
         p_ff->ref_shards = ll_shards;
     } else {
+        if (  List__length( ll_shards ) > 0  )
+            List__for_each( ll_shards, NULL, NULL, &__pf_delete_action, NULL );
         List__delete_deep( &ll_shards );
     }
 
@@ -769,7 +765,9 @@ static List_t* __parse_pattern(
 
                     case '$' : {
                         // Declarations don't save onto the node chain.
-                        if ( p_new_block ) {
+                        if ( NULL != p_new_block ) {
+                            if ( NULL != p_ref )
+                                free( p_ref );
                             free( p_new_block );
                             p_new_block = NULL;
                         }
@@ -832,8 +830,12 @@ static List_t* __parse_pattern(
 
                             // It should be OK to free these resources since the new variable declaration
                             //   is spawning a totally separate pattern factory with separate allocations.
-                            if ( NULL != p_popped )
+                            if ( NULL != p_popped ) {
+                                fuzz_pattern_block_t* p_popped_block = (fuzz_pattern_block_t*)p_popped;
+                                if ( NULL != p_popped_block->data )
+                                    free( p_popped_block->data );
                                 free( p_popped );
+                            }
                         }
 
                         // Create the new factory.
@@ -1190,6 +1192,10 @@ static List_t* __parse_pattern(
                 int root_index = List__index_of( p_seq, p_branch_root_block );
 
                 if ( track_index <= root_index || -1 == root_index ) {
+                    void* p_most_recent = List__remove_last( p_seq );
+                    if ( NULL != p_most_recent )
+                        free( p_most_recent );
+
                     FUZZ_ERR_IN_CTX( "Branch '|' encountered an unexpected indexing problem." );
                 }
 

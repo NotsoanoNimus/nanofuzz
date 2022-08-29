@@ -113,22 +113,39 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 }
 
 
-// Deletes any allocated gen ctx resources, but not 'deeply'.
-//   The factory is deleted separate from the genctx
-//   ^ TODO: Reconsider this since the generator and factory are technically not separate entities.
+// Deletes any allocated gen ctx resources, but not 'deeply'. Also deletes
+//   the attached pattern factory and all of its resources.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
-    if ( p_ctx ) {
-        if ( p_ctx->p_prng )  free( (void*)(p_ctx->p_prng) );
+    if ( NULL != p_ctx ) {
+        if ( NULL != p_ctx->p_prng ) {
+            free( (void*)(p_ctx->p_prng) );
+            p_ctx->p_prng = NULL;
+        }
 
-        if ( p_ctx->p_data_pool )  free( p_ctx->p_data_pool );
+        if ( NULL != p_ctx->p_data_pool ) {
+            free( p_ctx->p_data_pool );
+            p_ctx->p_data_pool = NULL;
+        }
 
-        for ( size_t u = 0; u < FUZZ_MAX_NESTING_COMPLEXITY; u++ )
-            if ( ((p_ctx->state).counter + u) )
+        for ( size_t u = 0; u < FUZZ_MAX_NESTING_COMPLEXITY; u++ ) {
+            if ( ((p_ctx->state).counter + u) ) {
                 free( *((p_ctx->state).counter + u) );
+                *((p_ctx->state).counter + u) = NULL;
+            }
+        }
 
-        // TODO: Experimental.
-        if ( p_ctx->p_factory )
+        if ( NULL != p_ctx->p_factory ) {
             PatternFactory__delete( p_ctx->p_factory );
+            p_ctx->p_factory = NULL;
+        }
+
+        if ( NULL != p_ctx->p_most_recent ) {
+            if ( NULL != p_ctx->p_most_recent->output )
+                free( (void*)(p_ctx->p_most_recent->output) );
+            free( p_ctx->p_most_recent );
+
+            p_ctx->p_most_recent = NULL;
+        }
 
         free( p_ctx );
     }
@@ -156,7 +173,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     // Let's do it, but play nicely.
-//printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
+    //printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
     void* p_instruction_limit =
         (void*)pip + (
             PatternFactory__get_count( p_ctx->p_factory )
@@ -168,7 +185,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
         // If the current state has a nullified pointer set and the type isn't a ret or sub, keep moving.
         if (  sub != pip->type && ret != pip->type && NULL != p_nullified  ) {
-//printf("\t[%u] wenull\n",pip->type);
             pip++;
             continue;
         }
@@ -185,17 +201,16 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             );
 
         // Helpful debugging information.
-//printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
+        //printf( "[N: %lu] [X: %u] [T: %u] [C: %5lu]\n", (p_ctx->state).nest_level, (NULL != p_nullified), pip->type, iters );
 
         // The block type must determine the next behavior used in pattern generation.
         switch ( pip->type ) {
 
             case reference : {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(pip->data);
-//printf( "GENREF '%s'\n", p_ref->label );
+
                 fuzz_gen_ctx_t* p_gctx =
                     __Generator__subcontext_for_label( p_ctx->p_factory, &(p_ref->label[0]) );
-//printf( "GENCTX: |%p|%p|%p|%d|\n", p_gctx, p_gctx->p_factory, p_gctx->p_prng, p_gctx->type );
 
                 // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
                 if ( NULL == p_gctx )  goto __gen_overflow;
@@ -205,9 +220,10 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 fuzz_str_t* p_str = p_gctx->p_most_recent;
                 if ( NULL == p_str ) {
                     // Hasn't been shuffled yet; generate the first item in the sub-factory.
-                    p_str = Generator__get_next( p_gctx );
+                    Generator__get_next( p_gctx );
                     was_regen = 1;
                 }
+                p_str = p_gctx->p_most_recent;
 
                 switch ( p_ref->type ) {
 
@@ -231,7 +247,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
                     // TODO: It would be nice to also be able to output lens in binary instead of a string.
                     //    This could help make stuff like data structure fuzzing more viable with this.
-//                    case ref_count_binary :
                     case ref_count_nullterm :
                     case ref_count : {
                         size_t len = p_str->length + (1*(ref_count_nullterm == p_ref->type));
@@ -258,7 +273,13 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         //   If this is already a fresh shuffle, don't do anything (saves time).
                         // NOTE: This ignores the 'iters' value to save time. Only one shuffle at a time.
                         if ( !was_regen ) {
-                            free( (void*)p_str->output ); free( p_str );
+                            if ( NULL != p_gctx->p_most_recent ) {
+                                if ( NULL != p_gctx->p_most_recent->output )
+                                    free( (void*)(p_gctx->p_most_recent->output) );
+                                free( p_gctx->p_most_recent );
+                                p_gctx->p_most_recent = NULL;
+                            }
+
                             Generator__get_next( p_gctx );
                         }
                         break;
@@ -315,7 +336,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         } else {
                             char_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, p_select->base, p_select->high );
                         }
-//printf( "RANGE: fragment %d/%lu; char %d (%d/%d-%d)\n", (frag_select+1), p_range->amount, char_select, p_select->single, p_select->base, p_select->high );
 
                         // Copy the selected character onto the output pool and increment.
                         *(p_current) = (unsigned char)char_select;
@@ -332,7 +352,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 // Get the pointer to the counter for the current nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
                 counter_t* p_ctr = *((p_ctx->state).counter + *lvl);
-//printf( "SUB ENTER LVL: |%lu|\n", *(lvl)+1 );
                 if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // Set the amount to generate and zero out the 'generated' counter.
@@ -361,8 +380,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 // If 'nullified' is set, check the p_ctr address to see if it matches. If so,
                 //   unset the nullification and break out of the null'd sub. Regardless, don't
                 //   follow repeats/counts and just break out of the nullified inner sub.
-                if ( p_nullified ) {
-//printf( "Nullified ptr: %p   /// Counter ptr: %p\n", p_nullified, p_ctr );
+                if ( NULL != p_nullified ) {
                     if ( p_ctr == p_nullified ) {
                         p_nullified = NULL;
                         p_ctr->how_many = 0;
@@ -383,7 +401,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                     // The sub is over. Decrease the nest level and continue.
                     __gen_ret_step_out:
                     *lvl = (*lvl)-1;
-//printf( "Step out to %lu\n", *lvl);
                     pip++;
                 }
                 break;
@@ -426,9 +443,11 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     fuzz_str_t* p_ret = (fuzz_str_t*)calloc( 1, sizeof(fuzz_str_t) );
     p_ret->length = (p_current - p_ctx->p_data_pool);
 
-    if ( p_ret->length ) {
+    if ( p_ret->length > 0 ) {
         p_ret->output = (const void*)calloc( (p_ret->length + 1), sizeof(char) );
+
         memcpy( (void*)p_ret->output, p_ctx->p_data_pool, (p_ret->length)*sizeof(char) );
+
         *((char*)(p_ret->output + p_ret->length)) = '\0';   //paranoia, necessary if 'output' will be printed
     } else {
         p_ret->output = NULL;
@@ -441,7 +460,9 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
 
     __gen_overflow:
-        // When a buffer is going to overflow, STOP and RESET!
+        // When a generator buffer is going to overflow, STOP and RESET!
+        //   This can also occur on other types of faults, so NULL is returned to indicate a
+        //   failure to generate patterned content.
         memset( p_ctx->p_data_pool, 0,
             ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
         (p_ctx->state).nest_level = 0;   //reset on overflow
@@ -486,6 +507,24 @@ void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
         + (p_ctx->p_data_pool)
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
     );
+}
+
+
+
+// Get the data pointer for the most recent data in a context.
+fuzz_str_t* Generator__get_most_recent( fuzz_gen_ctx_t* p_ctx ) {
+    if ( NULL != p_ctx )
+        return p_ctx->p_most_recent;
+
+    return NULL;
+}
+
+
+
+// Flush data pointer for most recent.
+void Generator__flush_most_recent( fuzz_gen_ctx_t* p_ctx ) {
+    if ( NULL != p_ctx )
+        p_ctx->p_most_recent = NULL;
 }
 
 

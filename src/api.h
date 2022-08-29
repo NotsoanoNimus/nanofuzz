@@ -38,7 +38,7 @@ nanofuzz_data_t* Nanofuzz__get_next( nanofuzz_context_t* p_ctx );
 
 // Free generated nanofuzz data. This is a simple wrspper and we leave leak tracking up
 //   to the implementer of the API since DATA blobs are context-independent.
-void Nanofuzz__delete_data( nanofuzz_data_t* p_data );
+void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data );
 
 
 // Pass-through/Wrapper function to explain what a fuzzer is doing step-by-step.
