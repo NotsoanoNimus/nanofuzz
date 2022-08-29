@@ -15,7 +15,7 @@ referenced and described. These terms are present to help better define and stan
 features, both now and later, when necessary.
 
 | Term | Description |
-| :--- | : --- |
+| :--- | :--- |
 | Pattern String | AKA a '_Pattern Schema_'. The primary input string used to guide the generation of output strings. |
 | [Pattern] Block | An individual unit in the sequence of compiled instructions used to generate the fuzzer output from the input Pattern String. |
 | Mechanism | A special character or segment in a pattern string which performs a special function or acts to further customize the generated outcome data. |
@@ -67,4 +67,4 @@ varying mechanisms used to create fuzzy outputs, and dives into examples for eac
 | Range | `[...]` | `[^\x00,0-9,A-Z,\xF0-\xFF]{,4}` | Specifies a set of characters (or an inverse thereof) which could be randomly chosen as part of the output data. |
 | Subsequence | `(...)` | `(abc(def){2,4}(ghi){1,3}jkl){1,2000}` | Creates a delimited subsegment of instructions in the output which can be treated as a single Block (unit) in output generation. |
 | Variable | `<...>` | `((mystring){1,5})<$VARNAME>` | Creates sub-patterns inside the primary generator which can be dynamically referenced, counted, reshuffled, etc. |
-| Branch | `...|...` | `a|b|(cde)|f` | Randomly elects to output one of the possible [single] Blocks with the pipe '|' operator between them. |
+| Branch | `...\|...` | `a\|b\|(cde)\|f` | Randomly elects to output one of the possible [single] Blocks with the pipe '\|' operator between them. |
