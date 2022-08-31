@@ -156,46 +156,54 @@ static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t*
 
 // Compress the contents of a pattern block list into a single calloc and set it in the factory.
 static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
-    if (  NULL == p_list )  return NULL;
-    if (  List__length( p_list ) < 1  ) {
-        List__delete_deep( &p_list );
-        return NULL;
-    }
+    if ( NULL == p_list )  return NULL;
 
     // Fetch the list items count, calloc, set each cell, and create the factory.
+    //   This is also partially local variable declaration space.
+    size_t len = List__length( p_list );
+
     fuzz_factory_t* x = (fuzz_factory_t*)calloc( 1, sizeof(fuzz_factory_t) );
-    x->count = ( List__length( p_list ) + 1 );   // +1 for 'end' node
+    x->count = (len + 1);   // +1 for 'end' node
 
-    // Create the new blob and start filling it out.
-    unsigned char* scroll = (unsigned char*)calloc(
-        x->count, sizeof(fuzz_pattern_block_t) );
+    void* p_data = NULL;
 
-    // Assign the node sequence to the created heap blob.
-    x->node_seq = scroll;
+    // Length check. If there's nothing to do, then unwind everything.
+    if ( len < 1 )
+        goto __compress_err;
 
-    // Insert from the list
-    // TODO: Hacky; replace basically this whole compression statement and function with List__to_array
-    for (
-        size_t i = 0;
-        i < List__length( p_list )
-            && scroll <= (unsigned char*)(x->node_seq + (x->count * sizeof(fuzz_pattern_block_t)));
-        i++
-    ) {
-        fuzz_pattern_block_t* p_x = (fuzz_pattern_block_t*)(List__get_at( p_list, i ));
+    // Convert the linked list of Blocks into a linear array in memory.
+    p_data = List__to_array( p_list, sizeof(fuzz_pattern_block_t), sizeof(fuzz_pattern_block_t) );
+    if ( NULL == p_data )
+        goto __compress_err;
 
-        memcpy( scroll, p_x, sizeof(fuzz_pattern_block_t) );
-        scroll += sizeof(fuzz_pattern_block_t);
+    // Quickly verify types.
+    for ( size_t x = 0; x < len; x++ ) {
+        fuzz_pattern_block_t* p_block =
+            (fuzz_pattern_block_t*)(p_data + (x * sizeof(fuzz_pattern_block_t)));
+
+        if ( (pattern_block_type)NULL == p_block->type || end == p_block->type )
+            goto __compress_err;
     }
+
+    // Set the node sequence pointer to the linear array.
+    x->node_seq = p_data;
 
     // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
     //   it encountered a terminal point.
-    fuzz_pattern_block_t* p_end = (fuzz_pattern_block_t*)scroll;
+    fuzz_pattern_block_t* p_end =
+        (fuzz_pattern_block_t*)(p_data + (len * sizeof(fuzz_pattern_block_t)));
     p_end->type = end;
     p_end->data = NULL;   // count and label don't matter, just the 'end' type
 
     // Return the built factory.
     List__delete_deep( &p_list );
     return x;
+
+    __compress_err:
+        free( x );
+        free( p_data );
+        List__delete_deep( &p_list );
+        return NULL;
 }
 
 
