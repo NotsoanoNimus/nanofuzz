@@ -66,5 +66,103 @@ varying mechanisms used to create fuzzy outputs, and dives into examples for eac
 | Repetition | `{...}` | `abc{,3}` | Changes the varying amount of times the previous Block will run. Can be a range from 0 to 65535. |
 | Range | `[...]` | `[^\x00,0-9,A-Z,\xF0-\xFF]{,4}` | Specifies a set of characters (or an inverse thereof) which could be randomly chosen as part of the output data. |
 | Subsequence | `(...)` | `(abc(def){2,4}(ghi){1,3}jkl){1,2000}` | Creates a delimited subsegment of instructions in the output which can be treated as a single Block (unit) in output generation. |
-| Variable | `<...>` | `((mystring){1,5})<$VARNAME>` | Creates sub-patterns inside the primary generator which can be dynamically referenced, counted, reshuffled, etc. |
 | Branch | `...\|...` | `a\|b\|(cde)\|f` | Randomly elects to output one of the possible [single] Blocks with the pipe '\|' operator between them. |
+| Variable | `<...>` | `((me,\s){4}me!{,3})<$VARNAME>` | Creates sub-patterns inside the primary generator which can be dynamically referenced, counted, reshuffled, etc. |
+
+
+### Static Strings
+
+Static strings are mostly-unchanging mechanisms that exist within any input Pattern. Writing a static
+string into an input Pattern indicates that the output text shouldn't look any different unless the
+mutation algorithm fuzzes it a bit (when enabled).
+
+Static strings look like the following:
+```
+generate\sthis\sstatic\sstring\severy\stime
+```
+
+... where the `\s` is an escape character (see below) representing a single _space_. This will
+consistently write the text `generate this static string every time` in the fuzzer output.
+
+
+### Escape Characters
+
+Much like static strings, escapes are mostly-unchanging and represent ASCII-style versions of special
+character codes that are not easily represented otherwise. All escape characters are preceded by the
+special `\\`. [Read more about them here](https://en.wikipedia.org/wiki/Escape_character).
+
+While any character can be escaped, the following escape characters are interpreted by nanofuzz to
+indicate a special character must be output:
+```
+\a ==> Code 0x07, BEL (bell) character
+\b ==> Code 0x08, BS (backspace) character
+\f ==> Code 0x0C, FF (form-feed) character
+\n ==> Code 0x0A, LF (line-feed) character
+\r ==> Code 0x0D, CR (carriage-return) character
+\s ==> Code 0x20, SPACE character (a plain space)
+\t ==> Code 0x09, TAB character
+\v ==> Code 0x0B, VT (vertical tab) character
+```
+
+It's important to note that hexidecimal, decimal, and octal escape codes like `\xF3` are only available
+__inside Range mechanisms__ at this time. See that section below for more information.
+
+
+### Repetitions
+
+Repetition mechanisms change the amount of times the preceding Block is run in the output generator. The
+amount of times which a Block should/could be repeated can be specified as a single value or as a range
+over values, in which case the generator will randomly pick a value in the range each time the Block is
+encountered.
+
+Repetition range values can go from `0` to `65535`, so they are essentially `unsigned short` values that
+max out at 16 bits wide.
+
+The syntax of a repetition appears as:
+```
+BLOCK{low,high}
+  or
+BLOCK{low}
+  or
+BLOCK{low,}
+  or
+BLOCK{,high}
+
+BLOCK ==> Any mechanism which creates a Block for the generator to process. This could be a
+            static string, a range, an entire subsequence, or a variable reference, for example.
+low   ==> The lower bound of times to repeat the block. If this is on its own without a comma,
+            the generator will explicitly generate the BLOCK 'low' times. If this appears with
+            a comma but no 'high' value, 'high' is automatically assumed to be 65535.
+high  ==> The upper bound of times to repeat the block. If following a blank 'low' count, the
+            generator assumes 'low' is the value 0.
+```
+
+For example, `c{3,5}` will generate the static string `c` __3 to 5 times__ each time the generator
+encounters that Block.
+
+To take the concept a bit further, using a repeating subsequence like:
+```
+(abcd{5,10}e{,1}){2}
+```
+... has the chance to generate an output like `abcddddddeabcdddddddd`, where the "inner" part of the
+subsequence mechanism (see below) is iterated twice (`{2}`) and the `d{5,10}` evaluated as "write `d`
+5 to 10 times". The `e{,1}` is interpreted as "write `e` 0 to 1 times".
+
+
+### Ranges
+
+
+
+
+### Subsequences
+
+
+
+
+### Branches
+
+
+
+
+### Variables
+
