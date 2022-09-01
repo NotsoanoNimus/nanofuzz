@@ -7,10 +7,11 @@
  *
  */
 
-#ifndef _FUZZ_GENERATOR_H
-#define _FUZZ_GENERATOR_H
+#ifndef NANOFUZZ_GENERATOR_H
+#define NANOFUZZ_GENERATOR_H
 
 #include "pattern.h"
+#include "tinymt64.h"
 
 #include <stdio.h>
 
@@ -75,4 +76,4 @@ fuzz_factory_t* Generator__get_context_factory( fuzz_gen_ctx_t* p_ctx );
 
 
 
-#endif   /* _FUZZ_GENERATOR_H */
+#endif   /* NANOFUZZ_GENERATOR_H */

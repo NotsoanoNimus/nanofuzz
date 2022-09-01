@@ -378,7 +378,7 @@ int main( int argc, char* const argv[] ) {
                 if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
                     write_to_out_file( p_data, gen_num, pfx );
                 } else {
-//                    printf(  "%s\n", (const char*)(p_data->output)  );
+                    printf(  "%s\n", (const char*)(p_data->output)  );
                 }
             } else {
                 printf( "Content generation failure.\n" );

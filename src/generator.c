@@ -8,10 +8,8 @@
  */
 
 #include "generator.h"
-#include "xoroshiro.h"
 
 #include <string.h>
-#include <time.h>
 
 
 
@@ -26,6 +24,7 @@ typedef struct _fuzz_generator_counter_t {
 //   These are disposable structures used only during active string generation.
 typedef struct _fuzz_generator_state_vector_t {
     // Array of pointers to counters tracking each nest/subsequence level.
+    //   TODO: Why is this an array of pointers and not just a normal contiguous blob??
     counter_t* counter[FUZZ_MAX_NESTING_COMPLEXITY];
     void* p_fuzz_factory_base;   // base ptr to the fuzz factory's blob data
     size_t nest_level;   // tracks the current index into ^
@@ -38,11 +37,76 @@ struct _fuzz_generator_context_t {
     state_t state;                   // see above; context state
     gen_pool_type type;              // controls the size of the alloc'd data pool
     fuzz_factory_t* p_factory;       // core of the context: constructed factory
-    xoroshiro256p_state_t* p_prng;   // PRNG structure (TODO: move to state vec?)
     fuzz_str_t* p_most_recent;       // points to the most recently-generated stream
     unsigned char* p_data_pool;      // stores generated data
     unsigned char* p_pool_end;       // marks the end of the data pool in memory
 };
+
+
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+// PRNG functions and structures.
+static inline uint64_t rotl( const uint64_t x, int k ) {
+    return ( (x << k) | (x >> (64 - k)) );
+}
+
+
+static uint64_t s[2];
+static int s_seeded = 0;
+
+static inline uint64_t Xoshiro128p__next_bounded( uint64_t low, uint64_t high ) {
+    const uint64_t range = 1 + high - low;
+
+    const uint64_t s0 = s[0];
+    uint64_t s1 = s[1];
+    const uint64_t result = s0 + s1;
+
+    s1 ^= s0;
+    s[0] = rotl( s0, 24 ) ^ s1 ^ (s1 << 16);
+    s[1] = rotl( s1, 37 );
+
+    return (
+        ( high > low )
+        * (
+            (
+                result
+                % (
+                    (
+                        ( ( 0 == range ) * 1 )
+                        + range
+                    )
+                )
+            )
+            + low
+        )
+    );
+}
+
+static void Xoshiro128p__init( void ) {
+    uint64_t seed_value;
+    unsigned int lo, hi;
+    tinymt64_t* p_prng_init;
+
+    // Get the amount of cycles since the processor was powered on.
+    //   This should act as a sufficient non-time-based PRNG seed.
+    __asm__ __volatile__ (  "rdtsc" : "=a" (lo), "=d" (hi)  );
+    seed_value = ( ((uint64_t)hi << 32) | lo );
+
+    p_prng_init = (tinymt64_t*)calloc( 1, sizeof(tinymt64_t) );
+    tinymt64_init( p_prng_init, seed_value );
+
+    // Seed Xoshiro128+.
+    s[0] = tinymt64_generate_uint64( p_prng_init );
+    s[1] = tinymt64_generate_uint64( p_prng_init );
+
+    free( p_prng_init );
+    s_seeded = 1;
+}
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
 
 
 
@@ -86,12 +150,13 @@ static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t*
 fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
     if ( NULL == p_factory )  return NULL;
     if ( (gen_pool_type)NULL == type )  type = normal;
+    if ( 0 == s_seeded )
+        Xoshiro128p__init();
 
     // Create the generator context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     x->type = type;
     x->p_factory = p_factory;
-    x->p_prng = xoroshiro__new();
     x->p_most_recent = NULL;
     x->p_data_pool = (unsigned char*)calloc( 1,
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
@@ -117,11 +182,6 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 //   the attached pattern factory and all of its resources.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
     if ( NULL != p_ctx ) {
-        if ( NULL != p_ctx->p_prng ) {
-            free( (void*)(p_ctx->p_prng) );
-            p_ctx->p_prng = NULL;
-        }
-
         if ( NULL != p_ctx->p_data_pool ) {
             free( p_ctx->p_data_pool );
             p_ctx->p_data_pool = NULL;
@@ -197,7 +257,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             (  ((pip->count).single > 0) * (pip->count).base  )
             + (
                 ((pip->count).single < 1)
-                * ( xoroshiro__get_bounded( p_ctx->p_prng, (pip->count).base, (pip->count).high ) )
+                  * ( Xoshiro128p__next_bounded( (pip->count).base, (pip->count).high ) )
             );
 
         // Helpful debugging information.
@@ -326,7 +386,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
                     // Loop over the range to get a random byte <iters> times.
                     for ( ; processed < iters; processed++ ) {
-                        uint8_t frag_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, 0, ((p_range->amount)-1) );
+                        uint8_t frag_select = (uint8_t)Xoshiro128p__next_bounded( 0, ((p_range->amount)-1) );
 
                         p_select = (p_frag + frag_select);
 
@@ -334,7 +394,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         if ( 0 != p_select->single ) {
                             char_select = p_select->base;
                         } else {
-                            char_select = xoroshiro__get_bounded_byte( p_ctx->p_prng, p_select->base, p_select->high );
+                            char_select = (uint8_t)Xoshiro128p__next_bounded( p_select->base, p_select->high );
                         }
 
                         // Copy the selected character onto the output pool and increment.
@@ -418,7 +478,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                 }
 
                 // Get the random index into the steps table and select it.
-                size_t select = xoroshiro__get_bounded( p_ctx->p_prng, 0, p_root->amount );
+                size_t select = Xoshiro128p__next_bounded( 0, p_root->amount );
 
                 unsigned short incr = p_root->steps[select];
                 pip += (incr ? incr : 1);   //always move by at least 1

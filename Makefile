@@ -28,12 +28,16 @@ TEST_COMPLIANCE=$(TEST)/compliance.py
 TEST_PROFILING=$(TEST)/profiling.py
 TEST_ITERS=200
 
+.PHONY: release all clean slib profile tests
+
 
 # By default, don't run tests. Just build the application.
 all: $(BIN)
 
+
 # Profiling build.
 profile: CFLAGS=$(COMMONFLAGS) -O3 -DDEBUG -DFUNCTION_PROFILING -finstrument-functions
+profile: NO_PIE=-no-pie
 profile: $(BIN)
 	if [ ! -f $(TEST_PROFILING) ]; then exit 1; fi
 	if [ ! -x $(TEST_PROFILING) ]; then chmod +x $(TEST_PROFILING); fi
@@ -76,11 +80,10 @@ $(OBJ)/%.o: $(SRC)/%.c
 
 $(BIN): $(OBJ) $(BINDIR) $(OBJS)
 	-rm $(BIN)
-	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LIBDEPEND)
+	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LIBDEPEND) $(NO_PIE)
 
 
 # TEST CASES. Creates the necessary folder structure for Criterion tests, and run them.
-.PHONY: tests
 tests: CFLAGS=-L./lib/ -L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64 $(COMMONFLAGS) $(EXTFLAGS)
 tests: all slib $(TESTOBJ) $(TESTBIN) $(TESTBINS)
 	for x in $(TESTBINS) ; do ./$$x ; done
