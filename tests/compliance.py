@@ -120,6 +120,7 @@ def pattern_to_regex( pattern ):
             loc = _regex.index( ")<$" )
             # Scan backward until the right '(' is found.
             rev = _regex[(loc-1)::-1]
+            rev = re.sub( r'[()]\\', "__", rev )
             nest = 1
             start_paren = 0
             for x in rev:
@@ -127,6 +128,7 @@ def pattern_to_regex( pattern ):
                     nest += 1
                 elif x == '(':
                     nest -= 1
+
                 if nest == 0:
                     break
                 else:
@@ -146,6 +148,7 @@ def pattern_to_regex( pattern ):
             #print( "--- NAME is |"+varname+"|")
             # Replace occurrences in the original string.
             _regex = _regex.replace( (statement + "<$" + varname + ">"), "" )
+            #print( "\t\tReplacing '{}' vars with '({})'".format( varname, statement ) )
             _regex = _regex.replace( ("<@" + varname + ">"), statement )
     except:
         pass   #exit loop
