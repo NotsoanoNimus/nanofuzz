@@ -679,7 +679,7 @@ void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx ) {
 // Instrumentation and profiling.
 #ifdef FUNCTION_PROFILING
 
-#define MAX_PROFILES 5000
+#define MAX_PROFILES 200
 #include <time.h>
 
 typedef struct __callee_stats {

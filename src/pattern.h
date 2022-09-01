@@ -51,8 +51,30 @@ typedef enum _reference_type {
 } reference_type;
 
 
-// A finalized, contiguous stream of blocks which is used to construct fuzzer output.
-typedef struct _fuzz_factory_t fuzz_factory_t;
+
+// Terse structure for indexing unsigned-long hashes to gen ctx pointers on the factory.
+//   This struct is populated in the __compress... function so gen lookups don't need to do
+//   haystack searches for variable labels and instead can use a very fast hash lookup.
+typedef struct _fuzz_hash_to_gen_ctx_t {
+    unsigned long _hash;    //the hash (using 'djb2')
+    void* _ctx;   //the generator context assoc w/ the string hash
+} _hash_to_gen_ctx_t;
+
+
+// Represents a single contiguous block of memory which all of the block items get joined into.
+//   This is what nanofuzz will actually use in generating content.
+typedef struct _fuzz_factory_t {
+    // Pointer to the blob of nodes...
+    void* node_seq;
+    // ... of size count, each = sizeof(fuzz_pattern_block_t)
+    size_t count;
+    // List of references attached to this factory as sub-factories by variable name.
+    List_t* ref_shards;
+    // See struct definition above.
+    _hash_to_gen_ctx_t shard_idx[FUZZ_MAX_VARIABLES];
+} fuzz_factory_t;
+
+
 
 // A sub-structure which holds reference/variable information inside the final
 //   factory node_seq.
@@ -64,6 +86,7 @@ typedef struct _fuzz_reference_t {
     reference_type type;
 } fuzz_reference_t;
 
+
 // A ranging structure used in the pattern blocks to determine the amount of times, if set,
 //   to repeat a block of pattern data. This is populated by the 'repetition' mechanism.
 // Interestingly, this same struct is used in the 'range' mechanism to apply restrictions.
@@ -72,6 +95,7 @@ typedef struct _fuzz_repetition_t {
     unsigned short base;
     unsigned short high;
 } fuzz_repetition_t;
+
 
 // A structure populated by the lexer's parsing of the 'range' mechanism.
 typedef struct _fuzz_range_t {
@@ -83,46 +107,37 @@ typedef struct _fuzz_range_t {
     size_t amount;
 } fuzz_range_t;
 
+
 // Used in branch ROOT mechanisms to elect a forward-path in the node sequence.
 typedef struct _fuzz_branch_root_t {
     unsigned short steps[FUZZ_MAX_STEPS];   // the different forward-step counts available
     size_t amount;   // how many steps are defined to choose from
 } fuzz_branch_root_t;
 
+
 // A block (or "piece") of an interpreted part of the input pattern information.
 typedef struct _fuzz_pattern_block_t {
-    // The type of pattern block being constructed: string, reference, sub, etc.
-    pattern_block_type type;
     // Represents a pointer to the node's data.
     //   This could point to a string, another List, etc. depending on the type.
     //   If this pointer is NOT NULL, it is assumed the referenced data is free-able.
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
     fuzz_repetition_t count;
+    // The type of pattern block being constructed: string, reference, sub, etc.
+    pattern_block_type type;
 } fuzz_pattern_block_t;
 
 
 
-// Return the private size of the fuzz factory structure.
-size_t PatternFactory__sizeof(void);
-// Get the blob data from the given fuzz factory struct.
-void* PatternFactory__get_data( fuzz_factory_t* p_fact );
-// Get the size of the data pool for a given factory.
-size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact );
-// Get the attached factory count of blobbed pattern blocks.
-size_t PatternFactory__get_count( fuzz_factory_t* p_fact );
-// Get the shard index pointer for the factory.
-void* PatternFactory__get_shard_index_ptr( fuzz_factory_t* p_fact );
-// Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
-void PatternFactory__delete( fuzz_factory_t* p_fact );
-// Explain the procedural string generation process, outputting to the given stream/file.
-void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 // Generate a pattern factory from an input pattern string.
 //   This method is wrapped in the API calls.
 fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p_err );
 
-// Extra function for sizeof private type. TODO: Necessary?
-size_t FuzzHash__sizeof( void );
+// Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
+void PatternFactory__delete( fuzz_factory_t* p_fact );
+
+// Explain the procedural string generation process, outputting to the given stream/file.
+void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 
 
 

@@ -31,29 +31,6 @@ typedef struct _fuzz_reference_shard_t {
     fuzz_gen_ctx_t* p_gen_ctx;
 } fuzz_ref_shard_t;
 
-// Internal structure for indexing unsigned-long hashes to gen ctx pointers on the factory.
-//   This struct is populated in the __compress... function so gen lookups don't need to do
-//   haystack searches for variable labels and instead can use a very fast hash lookup.
-typedef struct _fuzz_hash_to_gen_ctx_t {
-    unsigned long _hash;    //the hash (using 'djb2')
-    fuzz_gen_ctx_t* _ctx;   //the generator context assoc w/ the string hash
-} _hash_to_gen_ctx_t;
-size_t FuzzHash__sizeof( void ) {  return sizeof(_hash_to_gen_ctx_t);  }
-
-// Represents a single contiguous block of memory which all of the block items get joined into.
-//   This is what nanofuzz will actually use in generating content.
-// TODO: Add a flag for 'sub-factory' to prevent loops or stack overflows by chaining/nesting vardecls.
-struct _fuzz_factory_t {
-    // Pointer to the blob of nodes...
-    void* node_seq;
-    // ... of size count, each = sizeof(fuzz_pattern_block_t)
-    size_t count;
-    // List of references attached to this factory as sub-factories by variable name.
-    List_t* ref_shards;
-    // See struct definition above.
-    _hash_to_gen_ctx_t shard_idx[FUZZ_MAX_VARIABLES];
-};
-
 // Creates a context for a fuzzing pattern parser. This is so static variables
 //   don't step on each other in case multiple patterns are being initialized by this library at once.
 struct _fuzz_ctx_t {

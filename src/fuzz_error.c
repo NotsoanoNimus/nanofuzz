@@ -22,28 +22,34 @@ typedef struct _fuzz_error_t {
 } fuzz_error_t;
 
 // A fragment is a pairing of a string and its representative error type.
-struct _fuzz_error_fragment_t {
+typedef struct _fuzz_error_fragment_t {
     fuzz_error_code err_code;
     char* p_msg;
-};
+} fuzz_err_frag_t;
 
 
 
 // Gets whether the list actually has any errors by checking the length of the err list.
 int Error__has_error( fuzz_error_t* p_err ) {
     if ( NULL != p_err )
-        if ( NULL != p_err->p_fragments )
-            return (List__length( p_err->p_fragments ) > 0);
+        return (List__length( p_err->p_fragments ) > 0);
 
     return 0;
+}
+
+
+// Fetch the pointer to the fragments list.
+List_t* Error__get_fragments( fuzz_error_t* p_err ) {
+    return p_err->p_fragments;
 }
 
 
 // This is a _deep_ free on the Array List of error information, using an iterator.
 static void __err_delete_action( void* p_data, void* p_input, void** pp_result ) {
     if ( NULL != p_data ) {
-        struct _fuzz_error_fragment_t* p_frag = (struct _fuzz_error_fragment_t*)p_data;
-        if ( NULL != p_frag && NULL != p_frag->p_msg )
+        fuzz_err_frag_t* p_frag = (fuzz_err_frag_t*)p_data;
+
+        if ( NULL != p_frag )
             free( p_frag->p_msg );
     }
 }
@@ -59,7 +65,7 @@ void Error__delete( fuzz_error_t* p_err ) {
 
 
 static void __err_print_action( void* p_data, void* p_input, void** pp_result ) {
-    struct _fuzz_error_fragment_t* p_msg = (struct _fuzz_error_fragment_t*)p_data;
+    fuzz_err_frag_t* p_msg = (fuzz_err_frag_t*)p_data;
     fprintf(  (FILE*)p_input, "\t%s\n", p_msg->p_msg  );
 }
 void Error__print( fuzz_error_t* p_err, FILE* fp_to ) {
@@ -98,18 +104,17 @@ void Error__add(
     const char* p_msg
 ) {
     // Init if necessary.
-    if ( NULL == p_err )  p_err = Error__new();
+    if ( NULL == p_err )
+        p_err = Error__new();
 
     // Don't do anything if the pseudo-stack-trace seems to be overflowing.
     if ( List__length( p_err->p_fragments ) >= FUZZ_ERROR_MAX_NODES )  return;
 
     // Allocate a new fragment to hold the error details.
-    struct _fuzz_error_fragment_t* p_frag =
-        (struct _fuzz_error_fragment_t*)calloc( 1, sizeof(struct _fuzz_error_fragment_t) );
+    fuzz_err_frag_t* p_frag = (fuzz_err_frag_t*)calloc( 1, sizeof(fuzz_err_frag_t) );
     p_frag->err_code = code;
     p_frag->p_msg = strndup( p_msg, (FUZZ_ERROR_MAX_STRLEN-1) );
 
-    // gross TODO
     // Account for the maximum length of the static string, plus some extra possible integer
     //   spacing (up to: 14 for Index and 4 for Err), then also add on the message length.
     char* static_err = "[Err 1234] [Nest 1] [Index 12345678901234] ";
@@ -127,10 +132,4 @@ void Error__add(
 
     // Finally, add the fragment onto the end of the error stack trace.
     List__add(  p_err->p_fragments, (void*)p_frag  );
-}
-
-
-// Fetch the pointer to the fragments list.
-List_t* Error__get_fragments( fuzz_error_t* p_err ) {
-    return p_err->p_fragments;
 }

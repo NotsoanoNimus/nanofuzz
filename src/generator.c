@@ -23,19 +23,16 @@ typedef struct _fuzz_generator_counter_t {
 // Use a quantitative state vector/context when generating new fuzzer strings.
 //   These are disposable structures used only during active string generation.
 typedef struct _fuzz_generator_state_vector_t {
-    // Array of pointers to counters tracking each nest/subsequence level.
-    //   TODO: Why is this an array of pointers and not just a normal contiguous blob??
-    counter_t* counter[FUZZ_MAX_NESTING_COMPLEXITY];
-    void* p_fuzz_factory_base;   // base ptr to the fuzz factory's blob data
     size_t nest_level;   // tracks the current index into ^
+    counter_t counter[FUZZ_MAX_NESTING_COMPLEXITY];   // counters for tracking sub-related repetitions
 } state_t;
 
 // This struct is used to 'prime' the generator by directly providing a pre-
 //   allocated context to re/use for 'get_next' operations. Sharing this context
 //   does NOT affect the randomness of the sequences.
 struct _fuzz_generator_context_t {
-    state_t state;                   // see above; context state
     gen_pool_type type;              // controls the size of the alloc'd data pool
+    state_t state;                   // see above; context state
     fuzz_factory_t* p_factory;       // core of the context: constructed factory
     fuzz_str_t* p_most_recent;       // points to the most recently-generated stream
     unsigned char* p_data_pool;      // stores generated data
@@ -122,19 +119,18 @@ static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t*
     //   'Opaquely' here referring to the fact that this is iterating raw memory and is 'typeless'.
     //   A 'shard' here is a word which needs some refactoring. It essentially means an index or
     //   association between a string and a subcontext generator.
-    void* p_scroll = PatternFactory__get_shard_index_ptr( p_ff );
+    void* p_scroll = (void*)&(p_ff->shard_idx[0]);
     size_t i = 0;
-    size_t struct_size = FuzzHash__sizeof();
     for ( ; i < FUZZ_MAX_VARIABLES; i++ ) {
         if (
-            0 == memcmp(  (p_scroll + (i*struct_size)), &hash, sizeof(unsigned long)  )
+            0 == memcmp(  (p_scroll + (i*sizeof(_hash_to_gen_ctx_t))), &hash, sizeof(unsigned long)  )
         ) {
             // The value inside the private struct is a pointer, this is a pointer to that.
             //   Thus, a double-pointer is needed to dereference the genctx fully.
             return *(
                 (fuzz_gen_ctx_t**)(
                     p_scroll
-                    + (i*struct_size)
+                    + (i*sizeof(_hash_to_gen_ctx_t))
                     + sizeof(unsigned long)
                 )
             );
@@ -150,6 +146,9 @@ static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t*
 fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
     if ( NULL == p_factory )  return NULL;
     if ( (gen_pool_type)NULL == type )  type = normal;
+
+    // Seed the static PRNG if it hasn't been done yet. This will only happen a single time,
+    //   even if the application is running in threaded mode.
     if ( 0 == s_seeded )
         Xoshiro128p__init();
 
@@ -165,13 +164,8 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
     );
 
-    // Allocate initial state vector values and counter pointers.
-    //   TODO: Why are these on the heap?
-    for ( size_t o = 0; o < FUZZ_MAX_NESTING_COMPLEXITY; o++ ) {
-        *(((x->state).counter)+o) = (counter_t*)calloc( 1, sizeof(counter_t) );
-    }
+    memset( &((x->state).counter[0]), 0, sizeof(counter_t)*FUZZ_MAX_NESTING_COMPLEXITY );
     (x->state).nest_level = 0;
-    (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
 
     // Prime the generator. This reduces the amount of times we later need to check for
     //   whether `p_most_recent` is defined, because it always will be.
@@ -185,28 +179,17 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 //   the attached pattern factory and all of its resources.
 void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
     if ( NULL != p_ctx ) {
-        if ( NULL != p_ctx->p_data_pool ) {
-            free( p_ctx->p_data_pool );
-            p_ctx->p_data_pool = NULL;
-        }
+        free( p_ctx->p_data_pool );
+        p_ctx->p_data_pool = NULL;
 
-        for ( size_t u = 0; u < FUZZ_MAX_NESTING_COMPLEXITY; u++ ) {
-            if ( ((p_ctx->state).counter + u) ) {
-                free( *((p_ctx->state).counter + u) );
-                *((p_ctx->state).counter + u) = NULL;
-            }
-        }
+        PatternFactory__delete( p_ctx->p_factory );
+        p_ctx->p_factory = NULL;
 
-        if ( NULL != p_ctx->p_factory ) {
-            PatternFactory__delete( p_ctx->p_factory );
-            p_ctx->p_factory = NULL;
-        }
-
-        if ( NULL != p_ctx->p_most_recent ) {
+        if ( NULL != p_ctx->p_most_recent )
             free( (void*)(p_ctx->p_most_recent->output) );
-            free( p_ctx->p_most_recent );
-            p_ctx->p_most_recent = NULL;
-        }
+
+        free( p_ctx->p_most_recent );
+        p_ctx->p_most_recent = NULL;
 
         free( p_ctx );
     }
@@ -226,17 +209,14 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     unsigned char* p_current;
     counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
 
-    pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
+    pip = (fuzz_pattern_block_t*)(p_ctx->p_factory->node_seq);
     p_current = p_ctx->p_data_pool;
 
     // Let's do it, but play nicely.
     //printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
     void* p_instruction_limit =
-        (void*)pip + (
-            PatternFactory__get_count( p_ctx->p_factory )
-            * PatternFactory__sizeof()
-        )
-    ;
+        (void*)pip + (p_ctx->p_factory->count * sizeof(fuzz_factory_t));
+
     while ( pip && end != pip->type && (void*)pip < p_instruction_limit ) {
         if ( NULL == pip )  return NULL;   // TODO: should this be here?
 
@@ -408,7 +388,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case sub : {
                 // Get the pointer to the counter for the current nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
-                counter_t* p_ctr = *((p_ctx->state).counter + *lvl);
+                counter_t* p_ctr = &((p_ctx->state).counter[*lvl]);
                 if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // Set the amount to generate and zero out the 'generated' counter.
@@ -431,7 +411,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case ret : {
                 // Get the pointer to the counter for the __PREVIOUS__ (outer) nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
-                counter_t* p_ctr = *((p_ctx->state).counter + *lvl - 1);
+                counter_t* p_ctr = &((p_ctx->state).counter[*lvl - 1]);
                 if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // If 'nullified' is set, check the p_ctr address to see if it matches. If so,
