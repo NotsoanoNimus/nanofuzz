@@ -20,6 +20,8 @@
 
 #include <linux/limits.h>
 
+#include <yallic.h>
+
 #include "api.h"
 
 // Define constants as necessary.
@@ -370,6 +372,8 @@ int main( int argc, char* const argv[] ) {
     //   the program will loop. This is intentional.
     if ( worker_threads <= 1 ) {
         size_t i = 0, gen_num = 0, pfx = 0;
+        List_t* p_outputs = List__new( 0 );
+
         while ( i < amount_to_generate || !amount_to_generate ) {
 
             nanofuzz_data_t* p_data = Nanofuzz__get_next( p_fuzz_ctx );
@@ -378,20 +382,40 @@ int main( int argc, char* const argv[] ) {
                 if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
                     write_to_out_file( p_data, gen_num, pfx );
                 } else {
-                    printf(  "%s\n", (const char*)(p_data->output)  );
+                    // TESTING ONLY: Write the data to stdout
+//                    printf(  "%s\n", (const char*)(p_data->output)  );
                 }
             } else {
                 printf( "Content generation failure.\n" );
                 exit(1);
             }
 
-            Nanofuzz__delete_data( p_fuzz_ctx, p_data );
-            if ( amount_to_generate )  i++;
+            // TODO: When looping infinitely, this will cause a memory leak. FIX!
+            //Nanofuzz__delete_data( p_fuzz_ctx, p_data );
+            if ( amount_to_generate ) {
+                List__push( p_outputs, p_data );
+                i++;
+            }
+
+            if ( !(i % 50) ) {
+                // Clean up list entries.
+                size_t len = List__length( p_outputs );
+                for ( size_t x = 0; x < len; x++ )
+                    Nanofuzz__delete_data(  p_fuzz_ctx, List__pop( p_outputs )  );
+            }
 
             // I mean really, this shouldn't happen but.....
             gen_num++;
-            if ( gen_num >= UINT64_MAX )  pfx++;
+            if ( gen_num == UINT64_MAX )  pfx++;
         }
+
+        // Clean up list entries.
+        size_t len = List__length( p_outputs );
+        for ( size_t x = 0; x < len; x++ )
+            Nanofuzz__delete_data(  p_fuzz_ctx, List__pop( p_outputs )  );
+
+        List__delete_shallow( &p_outputs );
+
     } else {
         // Init the list of thread context pointers to 0.
         memset( &threads, 0, (sizeof(thread_ctx_t*)*FUZZ_MAX_THREADS) );
@@ -471,11 +495,13 @@ int main( int argc, char* const argv[] ) {
 //   is no more work to do in the current context.
 void* thread_do_work( void* p_work ) {
     thread_work_t* p_do = (thread_work_t*)p_work;
+    List_t* p_outputs = List__new( 0 );
 
     // If the jobs count is UINT64_MAX, this will go on forever.
     size_t howmany = p_do->jobs;
     while ( howmany > 0 ) {
         nanofuzz_data_t* p_data = Nanofuzz__get_next( p_do->p_fuzz_ctx );
+
         if ( NULL != p_data ) {
             if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
                  write_to_out_file(
@@ -484,15 +510,24 @@ void* thread_do_work( void* p_work ) {
                     p_do->pfx
                 );
             } else {
-//                printf(  "%s\n", (const char*)(p_data->output)  );
+                // TESTING ONLY: Write the data to stdout
+                printf(  "%s\n", (const char*)(p_data->output)  );
             }
         }
 
-        Nanofuzz__delete_data( p_do->p_fuzz_ctx, p_data );
-        if ( howmany < UINT64_MAX )  howmany--;
+        if ( howmany < UINT64_MAX ) {
+            List__push( p_outputs, p_data );
+            howmany--;
+        }
     }
 
     thread_update_amount( p_do->jobs );
+
+    size_t len = List__length( p_outputs );
+    for ( size_t x = 0; x < len; x++ )
+        Nanofuzz__delete_data(  p_do->p_fuzz_ctx, List__pop( p_outputs )  );
+
+    List__delete_shallow( &p_outputs );
 
     return NULL;
 }

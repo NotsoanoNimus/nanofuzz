@@ -157,7 +157,6 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     x->type = type;
     x->p_factory = p_factory;
-    x->p_most_recent = NULL;
     x->p_data_pool = (unsigned char*)calloc( 1,
         (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
     x->p_pool_end = (
@@ -173,6 +172,10 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     }
     (x->state).nest_level = 0;
     (x->state).p_fuzz_factory_base = PatternFactory__get_data( p_factory );
+
+    // Prime the generator. This reduces the amount of times we later need to check for
+    //   whether `p_most_recent` is defined, because it always will be.
+    Generator__get_next( x );
 
     return x;
 }
@@ -200,10 +203,8 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
         }
 
         if ( NULL != p_ctx->p_most_recent ) {
-            if ( NULL != p_ctx->p_most_recent->output )
-                free( (void*)(p_ctx->p_most_recent->output) );
+            free( (void*)(p_ctx->p_most_recent->output) );
             free( p_ctx->p_most_recent );
-
             p_ctx->p_most_recent = NULL;
         }
 
@@ -227,10 +228,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
     pip = (fuzz_pattern_block_t*)((p_ctx->state).p_fuzz_factory_base);
     p_current = p_ctx->p_data_pool;
-
-    // Zero string buffer. TODO: Should time be wasted on this, or should the ctx hold the len of the last str
-    //   and clear to JUST that??
-    memset( p_current, 0, ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
 
     // Let's do it, but play nicely.
     //printf( "\n=== [Nest] [Null?] [Type] [Count] ===\n" );
@@ -516,6 +513,10 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     // Save the pool information to the current generator context.
     p_ctx->p_most_recent = p_ret;
 
+    // Clear the data pool for the next generation.
+    memset( p_ctx->p_data_pool, 0, (p_ret->length + 1) );
+
+    // Return the data pointer.
     return p_ret;
 
 

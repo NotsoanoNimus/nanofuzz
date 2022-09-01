@@ -82,7 +82,8 @@ void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data )
         if (
                NULL != p_ctx
             && NULL != p_ctx->_p_gen_ctx
-            && p_data == Generator__get_most_recent( p_ctx->_p_gen_ctx )  )
+            && p_data == Generator__get_most_recent( p_ctx->_p_gen_ctx )
+        )
             Generator__flush_most_recent( p_ctx->_p_gen_ctx );
 
         free( p_data );

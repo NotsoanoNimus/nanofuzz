@@ -72,17 +72,17 @@ for x in pops:
     symbols.pop(x)
 
 # Sort the result.
-symbols_sorted = sorted( symbols.values(), key=lambda x: x["time"] )
+symbols_sorted = sorted( symbols.values(), key=lambda x: float(x["time"].replace('s','')) )
 symbols_sorted.reverse()
 
 # Finally, print all timed information.
 print( "\n\n| {:<48} | {:<16} | {:<16} |".format('FUNCTION','TIME','CALLS') )
 for y in symbols_sorted:
-    try:
-        if float( y["time"].replace('s','') ) < 0.0001:
-            continue
-    except:
-        pass
+    #try:
+    #    if float( y["time"].replace('s','') ) < 0.0001:
+    #        continue
+    #except:
+    #    pass
 
     print( "| {:<48} | {:<16} | {:<16} |".format( y["name"], y["time"], y["amnt"] ) )
 
