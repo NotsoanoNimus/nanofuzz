@@ -15,6 +15,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// If profiling is enabled, try to mask printf functions in inheriting files.
+#ifdef FUNCTION_PROFILING
+#define printf //##NAME
+#define fprintf //##NAME
+#endif   /* FUNCTION_PROFILING */
+
 // Maximum string length of error fragments.
 #define FUZZ_ERROR_MAX_STRLEN 512
 // Maximum amount of fragments the error list can hold.

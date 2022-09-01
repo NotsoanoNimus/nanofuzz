@@ -25,11 +25,19 @@ TESTBIN=$(TEST)/bin
 TESTOBJS=$(patsubst $(TEST)/%.c, $(TESTOBJ)/%.o, $(TESTS))
 TESTBINS=$(patsubst $(TEST)/%.c, $(TESTBIN)/%, $(TESTS))
 TEST_COMPLIANCE=$(TEST)/compliance.py
-TEST_ITERS=50
+TEST_PROFILING=$(TEST)/profiling.py
+TEST_ITERS=200
 
 
 # By default, don't run tests. Just build the application.
 all: $(BIN)
+
+# Profiling build.
+profile: CFLAGS=$(COMMONFLAGS) -O3 -DDEBUG -DFUNCTION_PROFILING -finstrument-functions
+profile: $(BIN)
+	if [ ! -f $(TEST_PROFILING) ]; then exit 1; fi
+	if [ ! -x $(TEST_PROFILING) ]; then chmod +x $(TEST_PROFILING); fi
+	$(TEST_PROFILING) $(TEST_ITERS)0
 
 
 # Static library file for testing. Excludes the main.o object.
@@ -45,7 +53,7 @@ $(SLIBOUT): $(LIB) $(OBJ) $(OBJS)
 # Release build is intended the be 'optimized' and tested thoroughly.
 release: clean
 release: EXTFLAGS=-O3 -DNDEBUG
-release: TEST_ITERS=100
+release: TEST_ITERS=5000
 release: tests
 
 

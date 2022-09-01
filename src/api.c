@@ -7,6 +7,8 @@
 
 #include "api.h"
 
+#include <pthread.h>
+
 
 
 // Define a structure which encapsulates the parent factory and gen ctx.
@@ -14,6 +16,14 @@
 struct _fuzz_global_context_t {
     fuzz_factory_t* _p_parent_factory;
     fuzz_gen_ctx_t* _p_gen_ctx;
+};
+
+// Create a structure that wraps a linked list, a chain type, and a thread mutex
+//   to control asynchronous ouput generation.
+struct _fuzz_output_chain_t {
+    List_t* p_queue;
+    nanofuzz_chain_type type;
+    pthread_mutex_t mutex;
 };
 
 

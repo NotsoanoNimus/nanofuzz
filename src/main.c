@@ -15,7 +15,6 @@
 #include <err.h>
 #include <errno.h>
 #include <ctype.h>
-#include <time.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -70,6 +69,17 @@ static void handle_signal( int signal );
 static char* read_data_from_file( FILE* fp_file, bool gets_size );
 void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx );
 
+#ifdef FUNCTION_PROFILING
+#define printf //##NAME
+// Instrumentation.
+void __cyg_profile_func_enter( void* callee, void* caller )
+    __attribute__((no_instrument_function));
+void __cyg_profile_func_exit( void* callee, void* caller )
+    __attribute__((no_instrument_function));
+void __profiling_print_stats( void )
+    __attribute__((no_instrument_function));
+#endif   /* FUNCTION_PROFILING */
+
 
 
 // Internal structure for providing spawned threads with information and 'work to do'.
@@ -110,6 +120,7 @@ static uint32_t app_flags = 0x00000000;
 
 
 // Main.
+__attribute__((no_instrument_function))
 int main( int argc, char* const argv[] ) {
     // Initial application setup.
     register_signal_handlers();
@@ -192,6 +203,9 @@ int main( int argc, char* const argv[] ) {
                 break;
 
             case 't':
+#ifdef FUNCTION_PROFILING
+                errx( 1, "Threaded operation is NOT SUPPORTED when running the 'profile' build.\n\n" );
+#endif   /* FUNCTION_PROFILING */
                 if ( (app_flags & FLAG_THREAD_COUNT) )
                     errx( 1, "The count of worker threads can only be specified once.\n" );
 
@@ -364,7 +378,7 @@ int main( int argc, char* const argv[] ) {
                 if ( (app_flags & FLAG_WRITE_TO_FILE) ) {
                     write_to_out_file( p_data, gen_num, pfx );
                 } else {
-                    printf(  "%s\n", (const char*)(p_data->output)  );
+//                    printf(  "%s\n", (const char*)(p_data->output)  );
                 }
             } else {
                 printf( "Content generation failure.\n" );
@@ -445,6 +459,10 @@ int main( int argc, char* const argv[] ) {
     Nanofuzz__delete( p_fuzz_ctx );
     free( p_output_file );
     free( p_pattern_contents );
+
+#ifdef FUNCTION_PROFILING
+    __profiling_print_stats();
+#endif   /* FUNCTION_PROFILING */
 }
 
 
@@ -466,7 +484,7 @@ void* thread_do_work( void* p_work ) {
                     p_do->pfx
                 );
             } else {
-                //printf(  "%s\n", (const char*)(p_data->output)  );
+//                printf(  "%s\n", (const char*)(p_data->output)  );
             }
         }
 
@@ -620,3 +638,106 @@ void write_to_out_file( nanofuzz_data_t* p_data, size_t gen_num, size_t pfx ) {
     free( (void*)x );
 
 }
+
+
+
+// Instrumentation and profiling.
+#ifdef FUNCTION_PROFILING
+
+#define MAX_PROFILES 5000
+#include <time.h>
+
+typedef struct __callee_stats {
+    void* func;
+    double total_time;
+    size_t total_calls;
+    clock_t start_time;
+    pthread_mutex_t mutex;
+} callee_stats_t;
+
+static pthread_mutex_t stats_mutex
+    = PTHREAD_MUTEX_INITIALIZER;
+
+static callee_stats_t stats[MAX_PROFILES];
+static size_t stats_count = 0;
+
+
+__attribute__((no_instrument_function))
+static inline int __cyg_profile_find_fn( void* fnptr ) {
+    size_t idx = 0;
+
+    for (
+        callee_stats_t* p = &(stats[0]);
+        p < (stats + MAX_PROFILES);
+        p++
+    ) {
+        if ( fnptr == p->func )
+            return idx;
+
+        idx++;
+    }
+
+    return -1;
+}
+
+
+
+void __cyg_profile_func_enter( void* callee, void* caller ) {
+    // See if a struct exists for this fptr.
+    callee_stats_t* p_stats = NULL;
+
+    int idx = __cyg_profile_find_fn( callee );
+    if (  -1 == idx && stats_count < MAX_PROFILES  ) {
+        p_stats = (callee_stats_t*)calloc( 1, sizeof(callee_stats_t) );
+        p_stats->func = callee;
+        p_stats->total_time = 0;
+        p_stats->total_calls = 0;
+
+        pthread_mutex_init( &(p_stats->mutex), NULL );
+
+        pthread_mutex_lock( &stats_mutex );
+
+        memcpy( &(stats[stats_count]), p_stats, sizeof(callee_stats_t) );
+        free( p_stats );
+        p_stats = &(stats[stats_count]);
+
+        stats_count++;
+
+        pthread_mutex_unlock( &stats_mutex );
+    } else {
+        p_stats = &(stats[idx]);
+    }
+
+    clock_t start_time = clock();
+
+    pthread_mutex_lock( &(p_stats->mutex) );
+    p_stats->start_time = start_time;
+    pthread_mutex_unlock( &(p_stats->mutex) );
+}
+
+void __cyg_profile_func_exit( void* callee, void* caller ) {
+    clock_t end_time = clock();   //get the end time and hold until the mutex releases
+
+    int idx = __cyg_profile_find_fn( callee );
+    if ( -1 != idx ) {
+        callee_stats_t* p_stats = &(stats[idx]);
+
+        pthread_mutex_lock( &(p_stats->mutex) );
+        p_stats->total_time += ((double)(end_time - p_stats->start_time) / CLOCKS_PER_SEC);
+        p_stats->total_calls++;
+        pthread_mutex_unlock( &(p_stats->mutex) );
+    }
+}
+
+
+#undef printf
+void __profiling_print_stats() {
+    printf( "\nAPPLICATION PROFILING STATISTICS:\n" );
+    for ( size_t x = 0; x < stats_count; x++ ) {
+        printf( "\t|%p| --> %.4fs --> %lu\n",
+            stats[x].func, stats[x].total_time, stats[x].total_calls );
+    }
+    printf( "\n\n" );
+}
+
+#endif   /* FUNCTION_PROFILING */
