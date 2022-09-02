@@ -78,10 +78,13 @@ typedef struct _fuzz_factory_t {
 // Holds information about a length-type reference and associated types.
 typedef enum _fuzz_ref_len_type {
     // Raw types:
-    binary = 1,
+    raw_little = 1,
+    raw_big,
     // ASCII string types:
+    binary,
     decimal,
     hexadecimal,
+    hex_upper,
     octal
 } reference_length_type;
 

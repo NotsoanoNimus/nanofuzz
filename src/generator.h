@@ -47,7 +47,7 @@ typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
 // Define the structure of generated data. This is simply a void-ptr to a blob, with a strict length.
 typedef struct _fuzz_str_t {
     const void* output;
-    size_t length;
+    unsigned long long int length;
 } fuzz_str_t;
 
 

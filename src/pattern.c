@@ -932,9 +932,12 @@ static List_t* __parse_pattern(
 
                         // Get the len type (raw vs. string, and format).
                         switch ( *p_lenopts_scroll ) {
+                            case 'g' : {  (p_ref->lenopts).type = raw_big; break;  }
+                            case 'l' : {  (p_ref->lenopts).type = raw_little; break;  }
                             case 'b' : {  (p_ref->lenopts).type = binary; break;  }
                             case 'd' : {  (p_ref->lenopts).type = decimal; break;  }
                             case 'x' : {  (p_ref->lenopts).type = hexadecimal; break;  }
+                            case 'X' : {  (p_ref->lenopts).type = hex_upper; break;  }
                             case 'o' : {  (p_ref->lenopts).type = octal; break;  }
                             default  : {
                                 free( (void*)p_lenopts );
@@ -952,20 +955,36 @@ static List_t* __parse_pattern(
                             VAR_ERR( "Variable length reference '<#>' needs a valid field width. "
                                 "Options are from 1 to 8, and 0 can be used for string outputs." );
                         } else {
-                            char* p_x = strndup( p_lenopts_scroll, 2 );
-                            *(p_x+1) = '\0';
+                            size_t width_len = (  isdigit( (int)(*(p_lenopts_scroll+1)) )  ) ? 3 : 2;
+                            char* p_x = strndup( p_lenopts_scroll, width_len );
+                            *(p_x+(width_len-1)) = '\0';   //paranoia
 
                             errno = 0;
                             unsigned long long width = strtoull( p_x, NULL, 10 );
                             free( p_x );
 
-                            if ( errno || width > 8 || ( 0 == width && binary == (p_ref->lenopts).type ) ) {
+                            // Check the width constrain on each. Each string type is the strlen(UINT64_MAX) for its base.
+                            int width_problem = 0;
+                            switch ( (p_ref->lenopts).type ) {
+                                case raw_big: case raw_little: { width_problem = ( 0 == width || width > 8 );  break;  }
+                                case hexadecimal: case hex_upper: {  width_problem = ( width > 16 ); break;  }   // FFFFFFFFFFFFFFFF
+                                case binary      : {  width_problem = ( 0 == width || width > 64 ); break;  }    // 64 1's
+                                case decimal     : {  width_problem = ( width > 20 ); break;  }   // 18446744073709551615
+                                case octal       : {  width_problem = ( width > 22 ); break;  }   // 1777777777777777777777
+                            }
+
+                            if ( width_problem || errno ) {
                                 free( (void*)p_lenopts );
                                 VAR_ERR( "Variable length reference '<#>' needs a valid field width. "
-                                    "Options are from 1 to 8, and 0 can be used for string outputs." );
+                                    "Options for each length reference type are listed in the documentation." );
                             }
 
                             (p_ref->lenopts).width = (unsigned short)(width & 0xFFFF);
+
+                            // Take the opportunity to piggyback off the already-checked condition and increment if
+                            //   the width value is double-digit.
+                            if ( width_len > 2 )
+                                p_lenopts_scroll++;
                         }
                         // Move forward.
                         p_lenopts_scroll++;

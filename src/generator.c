@@ -105,6 +105,12 @@ static void Xoshiro128p__init( void ) {
 ////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
 
+static uint64_t topow( uint64_t a, uint64_t b ) {
+    uint64_t r = a;
+    for ( uint64_t x = 1; x < b; x++ )  r *= a;
+    return r;
+}
+
 
 
 // Inline method to look up a registered/indexed generator context based on a hashed string (label) value.
@@ -267,7 +273,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                     case ref_reference : {
                         // Basically mimic what the static string stuff below does but DO NOT
                         //   utilize any strxyz methods since null bytes can exist in this buffer.
-                        size_t z = p_str->length;
+                        unsigned long long int z = p_str->length;
 
                         // Mindful of overflows.
                         if ( ((sizeof(char)*iters*z)+p_current) >= p_ctx->p_pool_end )
@@ -282,22 +288,94 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         break;
                     }
 
-                    // TODO: It would be nice to also be able to output lens in binary instead of a string.
-                    //    This could help make stuff like data structure fuzzing more viable with this.
                     case ref_count : {
-                        size_t len = p_str->length;
-                        char* p_len = (char*)calloc( 32, sizeof(char) );
+                        unsigned long long int len = p_str->length;
 
-                        snprintf ( p_len, 32, "%lx", len );
-                        *(p_len+31) = '\0';   //paranoia
+                        unsigned short width = (p_ref->lenopts).width;
 
-                        // Muh overflow.
-                        if ( ((sizeof(char)*iters*strlen(p_len))+p_current) >= p_ctx->p_pool_end )
+                        long long int add = (p_ref->lenopts).add;
+                        len += add;   //just do this now.
+
+                        char* p_len = (char*)calloc( 96, sizeof(char) );   //96 is arbitrary but it needs to be higher than 64
+                        if ( NULL == p_len ) {
                             goto __gen_overflow;
+                        }
 
-                        for ( ; processed < iters; processed++ ) {
-                            memcpy( p_current, p_len, strlen(p_len) );
-                            p_current += strlen(p_len);
+                        // NOTE: If a width is specified and the string overflows that width, the value will overflow back to 0.
+                        //        For now this is intended behavior, but may want to alter this to max out instead.
+                        if (  raw_little != (p_ref->lenopts).type && raw_big != (p_ref->lenopts).type  ) {
+                            char* p_fmt = (char*)calloc( 16, sizeof(char) );
+                            if ( NULL == p_fmt ) {
+                                free( p_fmt );
+                                goto __gen_overflow;
+                            }
+
+                            char base_code = 0;
+                            unsigned short width_multiplier = 0;
+
+                            switch ( (p_ref->lenopts).type ) {
+                                case binary      : {  base_code = 'b'; width_multiplier = 1;  break;  }
+                                case decimal     : {  base_code = 'd'; width_multiplier = 10; break;  }
+                                case hexadecimal : {  base_code = 'x'; width_multiplier = 4;  break;  }
+                                case hex_upper   : {  base_code = 'X'; width_multiplier = 4;  break;  }
+                                case octal       : {  base_code = 'o'; width_multiplier = 3;  break;  }
+                                // do NOT guess on the len type, just crash
+                                default          : {  free( p_fmt ); free( p_len ); goto __gen_overflow;  }
+                            }
+
+                            if ( width > 0 ) {
+
+                                if ( (width_multiplier*width) < 64 ) {
+                                    len %= ( decimal == (p_ref->lenopts).type )
+                                        ? (topow(10, width))
+                                        : (1UL << (width_multiplier*width));
+                                }
+
+                                if ( binary != (p_ref->lenopts).type ) {
+                                    sprintf( p_fmt, "%%0%hull%c", width, base_code );
+                                } else {
+                                    char* p_x = p_len;
+                                    for ( unsigned short x = width; x > 0; x--, p_x++ ) {
+                                        *(p_x) = ((len & (1UL<<(x-1))) ? '1' : '0');
+                                    }
+                                }
+                            } else {
+                                sprintf( p_fmt, "%%ll%c", base_code );
+                            }
+
+                            // Use the generated format-string to create the resulting length output.
+                            if ( binary != (p_ref->lenopts).type ) {
+                                snprintf ( p_len, 96, p_fmt, len );
+                            }
+                            *(p_len+95) = '\0';   //paranoia
+
+                            free( p_fmt );
+
+                            // Muh overflow.
+                            if ( ((sizeof(char)*iters*strlen(p_len))+p_current) >= p_ctx->p_pool_end ) {
+                                free( p_len );
+                                goto __gen_overflow;
+                            }
+
+                            // Copy the string to the pool for the indicated number of iterations.
+                            for ( ; processed < iters; processed++ ) {
+                                memcpy( p_current, p_len, strlen(p_len) );
+                                p_current += strlen(p_len);
+                            }
+                        } else {
+                            // The type is 'raw'. In this case, we do a direct write to the memory at 'p_len'
+                            //   at the given width, and also do the memcpy by width.
+                            // In this case, use the mask 0xFF sliding from the top of len or the bottom dep on endianness.
+                            static const unsigned char byte_mask = 0xFF;
+                            char* p_len_scroll = p_len;
+
+                            for ( unsigned short x = 0; x < width; x++ ) {
+                                if ( raw_little == (p_ref->lenopts).type )
+                                    *p_len_scroll = (uint8_t)( (len >> (8*x)) & byte_mask );
+                                else
+                                    *p_len_scroll = (uint8_t)( ((len << (8*x)) | (len >> (64-(8*x)))) & byte_mask );
+                                p_len_scroll++;
+                            }
                         }
 
                         free( p_len );
