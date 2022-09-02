@@ -290,6 +290,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
                     case ref_count : {
                         unsigned long long int len = p_str->length;
+                        unsigned long long int step_length = 0;   // used to determine length of final generated content
 
                         unsigned short width = (p_ref->lenopts).width;
 
@@ -350,32 +351,26 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                             *(p_len+95) = '\0';   //paranoia
 
                             free( p_fmt );
+                            step_length = strlen( p_len );
 
-                            // Muh overflow.
-                            if ( ((sizeof(char)*iters*strlen(p_len))+p_current) >= p_ctx->p_pool_end ) {
-                                free( p_len );
-                                goto __gen_overflow;
-                            }
-
-                            // Copy the string to the pool for the indicated number of iterations.
-                            for ( ; processed < iters; processed++ ) {
-                                memcpy( p_current, p_len, strlen(p_len) );
-                                p_current += strlen(p_len);
-                            }
                         } else {
                             // The type is 'raw'. In this case, we do a direct write to the memory at 'p_len'
-                            //   at the given width, and also do the memcpy by width.
-                            // In this case, use the mask 0xFF sliding from the top of len or the bottom dep on endianness.
-                            static const unsigned char byte_mask = 0xFF;
-                            char* p_len_scroll = p_len;
+                            //   at the given width.
+                            memcpy( p_len, &len, width );
 
-                            for ( unsigned short x = 0; x < width; x++ ) {
-                                if ( raw_little == (p_ref->lenopts).type )
-                                    *p_len_scroll = (uint8_t)( (len >> (8*x)) & byte_mask );
-                                else
-                                    *p_len_scroll = (uint8_t)( ((len << (8*x)) | (len >> (64-(8*x)))) & byte_mask );
-                                p_len_scroll++;
-                            }
+                            step_length = width;
+                        }
+
+                        // Muh overflow.
+                        if ( ((sizeof(char)*iters*step_length)+p_current) >= p_ctx->p_pool_end ) {
+                            free( p_len );
+                            goto __gen_overflow;
+                        }
+
+                        // Copy the string to the pool for the indicated number of iterations.
+                        for ( ; processed < iters; processed++ ) {
+                            memcpy( p_current, p_len, step_length );
+                            p_current += step_length;
                         }
 
                         free( p_len );

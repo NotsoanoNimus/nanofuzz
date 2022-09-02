@@ -791,8 +791,8 @@ static List_t* __parse_pattern(
                     case '$' : {
                         // Declarations don't save onto the node chain.
                         if ( NULL != p_new_block ) {
-                            if ( NULL != p_ref )
-                                free( p_ref );
+                            free( p_ref );
+                            p_ref = NULL;
                             free( p_new_block );
                             p_new_block = NULL;
                         }
@@ -1037,6 +1037,8 @@ static List_t* __parse_pattern(
                         __var_ref_len_exit:
                             free( (void*)p_lenopts );
                             p_ref->type = ref_count;
+
+                            *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                             break;
                     }
 
