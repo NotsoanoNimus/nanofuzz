@@ -284,9 +284,8 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
                     // TODO: It would be nice to also be able to output lens in binary instead of a string.
                     //    This could help make stuff like data structure fuzzing more viable with this.
-                    case ref_count_nullterm :
                     case ref_count : {
-                        size_t len = p_str->length + (1*(ref_count_nullterm == p_ref->type));
+                        size_t len = p_str->length;
                         char* p_len = (char*)calloc( 32, sizeof(char) );
 
                         snprintf ( p_len, 32, "%lx", len );

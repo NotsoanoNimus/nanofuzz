@@ -330,13 +330,24 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                 //   NOTE: ref_declaration types will never show up here, since they don't
                 //         create pattern blocks to use and this is an explanation thereof.
                 const char* p_reftype;
+                char* p_pre_reftype = NULL;
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(p->data);
 
                 switch ( p_ref->type ) {
                     case ref_reference      : {  p_reftype = "Paste pre-generated"; break;  }
-                    case ref_count          : {  p_reftype = "Output the length of the"; break;  }
-                    case ref_count_nullterm : {  p_reftype = "Output the length (+1) of the"; break;  }
                     case ref_shuffle        : {  p_reftype = "Regenerate"; break;  }
+                    case ref_count          : {
+                        p_pre_reftype = (char*)calloc( 256, sizeof(unsigned char) );
+
+                        snprintf(
+                            p_pre_reftype, 255,
+                            "Output the length (type '%d', '%hu' wide, add '%lld') of the",
+                            (p_ref->lenopts).type, (p_ref->lenopts).width, (p_ref->lenopts).add
+                        );
+                        p_reftype = (const char*)p_pre_reftype;
+
+                        break;
+                    }
                     default : {
                         fprintf( fp_stream, "~~~~~ Misunderstood reference type. This is a problem!\n" );
                         goto __explain_ref_unknown;
@@ -347,6 +358,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
                     p_reftype, p_ref->label, p_range_str );
 
                 __explain_ref_unknown:
+                    free( p_pre_reftype );
                     break;
             }
 
@@ -711,14 +723,40 @@ static List_t* __parse_pattern(
                 // Make sure the variable name referenced is 1-8 chars. This doesn't count
                 //   the operator [$@#*%] as a char (hence the +1).
                 // TODO: Fix the static '8' in the error string
-                if ( (end-1 - start) > (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1) ) {
+                if ( (end-1 - start) > (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1) && '#' != *start ) {
                     FUZZ_ERR_IN_CTX( "Variable '<>' names cannot be longer than 8 characters" );
-                } else if ( (end-1 - start) < 1 ) {
-                    FUZZ_ERR_IN_CTX( "Variable '<>' names must be at least 1 character in length" );
+                } else if ( (end-1 - start) > (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1 + 25) && '#' == *start ) {
+                    // If it's a length modifier, it's possible to use the following syntax:
+                    //   '<#[t][width]+[add]:VARNAME>', where:
+                    //      t = The output type. 'b' = binary (raw hex), 'd' = decimal ASCII string,
+                    //          'x' = hex ASCII string, 'o' = octal ASCII string; (1 char long)
+                    //      width = The size of the output field. BYTE, WORD, DWORD, QWORD: so vals from
+                    //          1-8 are OK. (1 char long)
+                    //      add = The amount to add to the length of the variable before writing it out
+                    //          This value can go to INT64_MAX and can be negative (21 characters long)
+                    //      (plus 2 more chars for the '+' and ':')
+                    FUZZ_ERR_IN_CTX( "Variable length references '<#>' must adhere to proper syntax" );
                 }
 
                 // Store the referenced variable name and prepare a reference block.
-                char* p_varname = strndup( (start+1), (end-start-1) );
+                char* tmpstart = (char*)start;
+                if ( '#' == *start ) {
+                    // For length definitions, move the pointer forward until a ':' is encountered.
+                    for ( ; tmpstart < (end-1); tmpstart++ ) {
+                        if ( ':' == *tmpstart )
+                            break;
+                    }
+                }
+
+                // Length checks and syntax checking. *start is still the first char after '<' here.
+                int namelen = (end-tmpstart-1);
+                if ( '#' == *start && (  (tmpstart - start) < 2 || !isdigit( (int)(*(start+2)) ) || (end-1) == tmpstart  ) ) {
+                    FUZZ_ERR_IN_CTX( "Variable length references '<#>' must at least have a type and width, followed by ':'" );
+                } else if ( 0 >= namelen ) {
+                    FUZZ_ERR_IN_CTX( "Variable '<>' names must be at least 1 character in length" );
+                }
+
+                char* p_varname = strndup( (tmpstart+1), namelen );
                 // Ensure the name is numeric and upper-case only.
                 for ( char* p_x = p_varname; *p_x; p_x++ ) {
                     if ( !isdigit((int)*p_x) && !isupper((int)*p_x) ) {
@@ -726,12 +764,13 @@ static List_t* __parse_pattern(
                     }
                 }
 
+                // Create the reference data, attach info as necessary.
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)calloc( 1, sizeof(fuzz_reference_t) );
                 memcpy ( &(p_ref->label[0]), p_varname,
                     strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
                 p_ref->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
 
-                // Spin up the new block.
+                // Spin up the new block and attach the new reference data.
                 p_new_block = NEW_PATTERN_BLOCK;
                 p_new_block->type = reference;
                 p_new_block->data = p_ref;
@@ -744,8 +783,9 @@ static List_t* __parse_pattern(
 
                 // The length of the inner content must be upper-case and consist of:
                 //   + Operation specifier (1 char)
+                //      + Special case for '#' length refs
                 //   + Upper-case Label (1-8 chars)
-                // Format: <[$@#*%]NAMENAME>
+                // Format: <[$@#%]NAMENAME>
                 switch ( *start ) {
 
                     case '$' : {
@@ -788,7 +828,7 @@ static List_t* __parse_pattern(
                         //   string used to initialize the sub-factory and gen ctx.
                         //   It is CRITICAL that this resource be freed and pointed to NULL when done.
                         if ( NULL == p_lvl0_sub || strlen(p_lvl0_sub) < 0 ) {
-                            VAR_ERR( "Declarations '<$...>' must be created at nest-level ZERO only." );
+                            VAR_ERR( "Declarations '<$...>' cannot be defined within subsequence '()' mechanisms" );
                         }
 
                         // Ensure a variable by this explicit name doesn't already exist on the current factory.
@@ -805,7 +845,7 @@ static List_t* __parse_pattern(
                         // Another check: throw an error if this declaration exceeds the arraylist limitation.
                         //   TODO: Fix static '16' in this string
                         if ( List__length( ll_shards ) >= FUZZ_MAX_VARIABLES ) {
-                            VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 16." );
+                            VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 16" );
                         }
 
                         // The count of list items to be deleted lives in the data of the 'ret' pattern
@@ -855,8 +895,6 @@ static List_t* __parse_pattern(
                     }
 
                     case '@' :
-                    case '#' :
-                    case '*' :
                     case '%' : {
                         // Check whether the variable name exists in the ll_shards linked list.
                         //   TODO: HACKY!
@@ -872,21 +910,115 @@ static List_t* __parse_pattern(
                         }
 
                         if ( NULL == p_x ) {
-                            VAR_ERR( "Variable references '<@...>' an undeclared variable name" );
+                            VAR_ERR( "Variable reference ('<@>' or '<%>') uses an undeclared variable name" );
                         }
 
                         // Set the type and the prev node tracker for the nest level.
-                        if ( '@' == *start )
-                             p_ref->type = ref_reference;
-                        else if ( '#' == *start )
-                             p_ref->type = ref_count;
-                        else if ( '*' == *start )
-                             p_ref->type = ref_count_nullterm;
-                        else
-                             p_ref->type = ref_shuffle;
-
+                        p_ref->type = ( '@' == *start ) ? ref_reference : ref_shuffle;
                         *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
+
                         break;
+                    }
+
+                    case '#' : {
+                        // At this point 'tmpstart' is at the ':', varname is deduced, and start is at '#'.
+                        int opts_length = (tmpstart-1 - start);
+                        if ( 2 > opts_length ) {   //must inclde a digit and a char at the very least
+                            VAR_ERR( "Variable length reference '<#>' does not include valid options" );
+                        }
+
+                        const char* const p_lenopts = (const char* const)strndup( (start+1), opts_length );
+                        char* p_lenopts_scroll = (char*)p_lenopts;   //scroll ptr so the original can be freed when done
+
+                        // Get the len type (raw vs. string, and format).
+                        switch ( *p_lenopts_scroll ) {
+                            case 'b' : {  (p_ref->lenopts).type = binary; break;  }
+                            case 'd' : {  (p_ref->lenopts).type = decimal; break;  }
+                            case 'x' : {  (p_ref->lenopts).type = hexadecimal; break;  }
+                            case 'o' : {  (p_ref->lenopts).type = octal; break;  }
+                            default  : {
+                                free( (void*)p_lenopts );
+                                VAR_ERR( "Variable length reference '<#>' type is not valid" );
+                                break;
+                            }
+                        }
+                        // Move forward.
+                        p_lenopts_scroll++;
+
+                        // Get the width of the generated field. '0' is OK to use for d,x,o length types,
+                        //   meaning the output will not be 0-padded at all.
+                        if (  !isdigit( (int)(*p_lenopts_scroll) )  ) {
+                            free( (void*)p_lenopts );
+                            VAR_ERR( "Variable length reference '<#>' needs a valid field width. "
+                                "Options are from 1 to 8, and 0 can be used for string outputs." );
+                        } else {
+                            char* p_x = strndup( p_lenopts_scroll, 2 );
+                            *(p_x+1) = '\0';
+
+                            errno = 0;
+                            unsigned long long width = strtoull( p_x, NULL, 10 );
+                            free( p_x );
+
+                            if ( errno || width > 8 || ( 0 == width && binary == (p_ref->lenopts).type ) ) {
+                                free( (void*)p_lenopts );
+                                VAR_ERR( "Variable length reference '<#>' needs a valid field width. "
+                                    "Options are from 1 to 8, and 0 can be used for string outputs." );
+                            }
+
+                            (p_ref->lenopts).width = (unsigned short)(width & 0xFFFF);
+                        }
+                        // Move forward.
+                        p_lenopts_scroll++;
+
+                        // For syntax purposes, the next character must either be a '+' or a ':' (the
+                        //  end of the scroll string-- see above).
+                        if ( '\0' == *p_lenopts_scroll ) {
+                            (p_ref->lenopts).add = 0;
+                            goto __var_ref_len_exit;
+                        } else if ( '+' != *p_lenopts_scroll ) {
+                            free( (void*)p_lenopts );
+                            VAR_ERR( "Variable length reference '<#>' contains an invalid character after"
+                                " its width specification. Valid characters are '+' or ':'." );
+                        }
+                        // Move forward.
+                        p_lenopts_scroll++;
+
+                        // The end _cannot_ be right here. If the string is null-terminated at this position,
+                        //   then that means something like <#d0+:VARNAME> was entered, which uses a plus, but
+                        //   doesn't actually include any kind off add value. Ordinarily, it wouldn't matter,
+                        //   but nanofuzz is a chad who enjoys le proper syntax.
+                        if ( '\0' == *p_lenopts_scroll ) {
+                            free( (void*)p_lenopts );
+                            VAR_ERR( "Variable length reference '<#>' contains an invalid or empty"
+                                " width after the '+' character" );
+                        }
+
+                        // Parse the final 'add' value. It doesn't matter what the value is as long as stroul
+                        //   understands what it is. It's up to the caller/input to prevent size_t overflows.
+                        char* p_tmp = p_lenopts_scroll;
+                        if ( '-' == *p_tmp )
+                            p_tmp++;
+
+                        for ( ; (*p_tmp); p_tmp++ ) {
+                            if (  !isdigit( (int)(*p_tmp) )  ) {
+                                free( (void*)p_lenopts );
+                                VAR_ERR( "Variable length reference '<#>' addition value must be numeric" );
+                            }
+                        }
+
+                        errno = 0;
+                        long long int add = strtoll( p_lenopts_scroll, NULL, 10 );
+                        if ( errno ) {
+                            free( (void*)p_lenopts );
+                            VAR_ERR( "Variable length reference '<#>' addition value was misunderstood" );
+                        } else {
+                            (p_ref->lenopts).add = add;
+                        }
+
+                        __var_ref_len_exit:
+                            free( (void*)p_lenopts );
+                            p_ref->type = ref_count;
+                            break;
                     }
 
                     default : {
@@ -896,17 +1028,16 @@ static List_t* __parse_pattern(
                 }
 
                 // Set 'p' to end. It will increment to the next character after the for-loop continues.
-                if ( p_varname )  free( p_varname );
-                // NOTE: Do NOT free the fuzz_reference_t ptr here
+                // NOTE: Do NOT free the fuzz_reference_t ptr here, just the dup'd varname string
+                free( p_varname );
                 p = end;
                 break;
 
                 __var_ref_error:
-                    if ( p_varname )  free( p_varname );
-                    if ( p_ref )  free( p_ref );
+                    free( p_varname );
+                    free( p_ref );
 
-                    if ( NULL != p_lvl0_sub )
-                        free( (void*)p_lvl0_sub );
+                    free( (void*)p_lvl0_sub );
                     p_lvl0_sub = NULL;
 
                     FUZZ_ERR_IN_CTX( p_errmsg );
@@ -944,7 +1075,7 @@ static List_t* __parse_pattern(
             // ********** REPETITIONS **********
             case '{': {
                 // The current block ptr cannot be NULL.
-                // TODO: This shouldn't follow boolean-OR mechs
+                // TODO: This shouldn't follow branch mechs
                 if ( NULL == *((p_ctx->p_nest_tracker)+nest_level) ) {
                     FUZZ_ERR_IN_CTX( "The repetition statement '{}' must follow a valid string or other pattern" )
                 }

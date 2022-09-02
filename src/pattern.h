@@ -46,7 +46,6 @@ typedef enum _reference_type {
     ref_declaration = 1,    // declare a named variable & shuffle
     ref_reference,          // reference/paste a variable
     ref_count,              // output a number repr. a var's length
-    ref_count_nullterm,     // same as above, +1
     ref_shuffle             // shuffle (get_next) a variable output
 } reference_type;
 
@@ -76,6 +75,22 @@ typedef struct _fuzz_factory_t {
 
 
 
+// Holds information about a length-type reference and associated types.
+typedef enum _fuzz_ref_len_type {
+    // Raw types:
+    binary = 1,
+    // ASCII string types:
+    decimal,
+    hexadecimal,
+    octal
+} reference_length_type;
+
+typedef struct _fuzz_reference_lenopts_t {
+    reference_length_type type;   /**< The type of reference length to output. */
+    unsigned short width;   /**< The width of the variable field in the output binary/string. */
+    long long int add;   /**< The amount to add/subtract with the length of the generated variable. */
+} fuzz_reference_length_options_t;
+
 // A sub-structure which holds reference/variable information inside the final
 //   factory node_seq.
 typedef struct _fuzz_reference_t {
@@ -84,6 +99,8 @@ typedef struct _fuzz_reference_t {
     char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
     // The sub-type for the reference.
     reference_type type;
+    // The following OPTIONAL fields are only used (at the moment) for length references.
+    fuzz_reference_length_options_t lenopts;
 } fuzz_reference_t;
 
 
@@ -120,6 +137,8 @@ typedef struct _fuzz_pattern_block_t {
     // Represents a pointer to the node's data.
     //   This could point to a string, another List, etc. depending on the type.
     //   If this pointer is NOT NULL, it is assumed the referenced data is free-able.
+    // TODO: Turn this into a union of all possible reference types, further reducing the
+    //        need for including unsafe and scattered void ptrs in the final factory.
     void* data;
     // How many times to produce this specific node's data. Defaults to 1.
     fuzz_repetition_t count;
