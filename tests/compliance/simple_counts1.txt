@@ -1,0 +1,25 @@
+(
+    (
+        [^\x00]{1,400}
+    )
+    ===
+    (
+        [\xF0-\xFF]{1,10}
+    )
+)<$BODY>
+
+(
+    [^\n,\r]{1,200}
+)<$HOST>
+
+
+GET\s/index.php\sHTTP/1.1\r\n
+<%HOST>Host:\s<@HOST>\r\n
+Content-Length:\s<#d0+0:BODY>\r\n
+Pragma:\sno-cache\r\n
+Content-Type:\stext/<#x8:BODY>\r\n
+(X-[^\x00]{1,25}Mail-Test:{1,3}\s{1,10}<#l4+0:HOST>\r\n){1,3}
+\r\n
+<%BODY><@BODY>\r\n
+\r\n
+

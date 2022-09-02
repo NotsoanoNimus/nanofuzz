@@ -114,6 +114,13 @@ def pattern_to_regex( pattern ):
     #   Ex: 'a|b|<%VAR>|c|d' --> 'a|b|(.{0})|c|d'   /// 'a|b|c|d|<%VAR>' --> 'a|b|c|d|(.{0})'
     _regex = re.sub( r'<%[A-Za-z0-9]+>', '(.{0})', _regex )
 
+    # Replace variable length types with a simple regex.
+    _regex = re.sub( r'<#d.*?:[0-9A-Z]+?>', '([0-9]+?)', _regex )
+    _regex = re.sub( r'<#x.*?:[0-9A-Z]+?>', '([0-9A-Fa-f]+?)', _regex )
+    _regex = re.sub( r'<#o.*?:[0-9A-Z]+?>', '([0-7]+?)', _regex )
+    _regex = re.sub( r'<#b.*?:[0-9A-Z]+?>', '([01]+?)', _regex )
+    _regex = re.sub( r'<#[rgl]([0-9]).*?:[0-9A-Z]+?>', r'([\x00-\xFF]{1,\1}?)', _regex )
+
     # Find variable declarations and expand their occurrences.
     try:
         while True:   #keep going until no more ")<$" instances (declarations)
