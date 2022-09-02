@@ -90,10 +90,10 @@ Test(dummytests, segfault, .signal = SIGSEGV) {
 
 // Static strings & escapes.
 TEST_VALID(staticstr1, "aaaaa");
-TEST_VALID(staticstr2, "\\r\\n\\x\\f\\s234");
+TEST_VALID(staticstr2, "\\r\\n\\x37\\f\\x2f\\s234");
 TEST_VALID(staticstr3, "a\\<\\[A-Z\\]\\]");
 TEST_VALID(staticstr4, "aaa\\{aa");
-TEST_VALID(staticstr5, "aa\\r\\n\\r\\n\\b\\x\\v\\t\\0raaa\\\\");
+TEST_VALID(staticstr5, "aa\\r\\n\\r\\n\\b\\xff\\v\\t\\0raaa\\\\");
 
 // Repetition mechanisms.
 TEST_VALID(repetition1,  "a{1,3}bcd");

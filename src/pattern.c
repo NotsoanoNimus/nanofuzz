@@ -628,19 +628,44 @@ static List_t* __parse_pattern(
                 char esc = *(p+1);
                 char final;
 
-                if ( !esc ) {  FUZZ_ERR_IN_CTX( "The escaped character could not be understood" );  }
-                final = __escape_to_value( esc );
+                if ( !esc ) {
+                    FUZZ_ERR_IN_CTX( "The escaped character could not be understood" );
+                }
 
                 p_new_block = NEW_PATTERN_BLOCK;
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
                 p_new_block->type = string;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+
+                if ( 'x' == esc || 'X' == esc ) {
+                    if ( !isxdigit( (int)*(p+2) ) || !isxdigit( (int)*(p+3) ) ) {
+                        FUZZ_ERR_IN_CTX( "Escaped hexadecimal '\\x##' mechanisms expect a "
+                            "valid two-letter hex code following the 'x'" );
+                    }
+                    char* p_x = strndup( p+2, 2 );
+
+                    errno = 0;
+                    long int val = strtol( p_x, NULL, 16 );
+
+                    if ( errno || val > 255 || val < 0 ) {
+                        FUZZ_ERR_IN_CTX( "Escaped hexadecimal '\\x##' value is not valid or could not be parsed" );
+                    }
+
+                    free( p_x );
+                    final = (char)val;
+
+                    p += 3;   // move to 2nd digit of the hex seq (the turn of the new loop will move it again)
+                } else {
+                    final = __escape_to_value( esc );
+
+                    p++;   //skips over the character being escaped since it's been handled
+                }
+
                 p_new_block->data = (char*)calloc( 2, sizeof(char) );
                 *((char*)(p_new_block->data)) = final;
                 *((char*)(p_new_block->data)+1) = '\0';
 
-                p++;   //skips over the character being escaped since it's been handled
                 break;
             }
 
