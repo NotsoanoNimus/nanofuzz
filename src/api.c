@@ -8,15 +8,18 @@
 #include "api.h"
 
 #include <pthread.h>
+#include <string.h>
+#include <unistd.h>
 
 
 
 // Create a structure that wraps a simple stack, a stack type, and a thread mutex
 //   to control asynchronous stack operations.
 struct _fuzz_output_stack_t {
-    void* p_stack_base;
-    size_t stack_size;
-    size_t stack_count;
+    void* p_base;
+    size_t size;
+    size_t data_size;
+    size_t count;
     nanofuzz_stack_type type;
     pthread_mutex_t mutex;
 };
@@ -34,12 +37,9 @@ struct _fuzz_global_context_t {
 
 ////////////////////////////////////////////////////////////////////////////////////
 // Thread and stack functions for output chains (see bottom).
-static void* Nanofuzz__thread_refresh_context( void* p_ctx );   //worker thread function.
-static int Nanofuzz__output_stack_push( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data );
-static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_context_t* p_ctx );
-//static nanofuzz_data_t* Nanofuzz__output_stack_peek( nanofuzz_context_t* p_ctx );
-static int Nanofuzz__output_stack_is_full( nanofuzz_context_t* p_ctx );
-static int Nanofuzz__output_stack_is_empty( nanofuzz_context_t* p_ctx );
+static void* Nanofuzz__thread_refresh_context( void* _p_ctx );   //worker thread function.
+static int Nanofuzz__output_stack_push( nanofuzz_output_stack_t* p_stack, nanofuzz_data_t* p_data );
+static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_output_stack_t* p_stack );
 ////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -61,6 +61,8 @@ nanofuzz_context_t* Nanofuzz__new(
     // Create a new fuzzer context.
     nanofuzz_context_t* p_ctx = (nanofuzz_context_t*)calloc(
         1, sizeof(nanofuzz_context_t) );
+    if ( NULL == p_ctx )
+        goto __context_new_err;
 
     // Parse the pattern. On error, return NULL to indicate and error has occurred.
     p_ctx->_p_parent_factory = PatternFactory__new( p_pattern, pp_err_ctx );
@@ -75,10 +77,11 @@ nanofuzz_context_t* Nanofuzz__new(
     nanofuzz_output_stack_t* p_stack = &(p_ctx->_stack);
     pthread_mutex_init( &(p_stack->mutex), NULL );
     p_stack->type = output_stack_type;
-    p_stack->stack_size = (sizeof(nanofuzz_data_t) * output_stack_size);
-    p_stack->stack_count = output_stack_size;
-    p_stack->p_stack_base = calloc( 1, p_stack->stack_size );
-    if ( NULL == p_stack->p_stack_base )
+    p_stack->count = 0;
+    p_stack->size = output_stack_size;
+    p_stack->data_size = (sizeof(nanofuzz_data_t) * output_stack_size);
+    p_stack->p_base = calloc( 1, p_stack->size );
+    if ( NULL == p_stack->p_base )
         goto __context_new_err;
 
     // Spin up the new pthread (detached) and start it immediately.
@@ -97,7 +100,7 @@ nanofuzz_context_t* Nanofuzz__new(
     // Jumped to on any error init'ing the ctx.
     __context_new_err:
         if ( NULL != p_ctx )
-            free( (p_ctx->_stack).p_stack_base );
+            free( (p_ctx->_stack).p_base );
         free( p_ctx );
         return NULL;
 }
@@ -105,10 +108,10 @@ nanofuzz_context_t* Nanofuzz__new(
 
 // Destroy function to free all Nanofuzz context resources.
 void Nanofuzz__delete( nanofuzz_context_t* p_ctx ) {
-    if ( NULL != p_ctx ) {
+    if ( NULL != p_ctx )
         Generator__delete_context( p_ctx->_p_gen_ctx );   //also deletes factory resources
-        free( p_ctx );
-    }
+
+    free( p_ctx );
 }
 
 
@@ -157,27 +160,76 @@ void Nanofuzz__PatternFactory__explain( FILE* fp_stream, nanofuzz_context_t* p_f
 ////////////////////////////////////////////////////////////////////////////////////
 
 // Main thread loop to initally populate a stack and/or continue refilling it.
-static void* Nanofuzz__thread_refresh_context( void* p_ctx ) {
+static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
+    nanofuzz_context_t* p_ctx = (nanofuzz_context_t*)_p_ctx;
+    nanofuzz_output_stack_t* p_stack = &(p_ctx->_stack);
+
+    // For 'oneshot' stack types, fill the data stack and quit.
+    if ( oneshot == p_stack->type ) {
+        size_t generated = 0;
+
+        while ( generated < p_stack->size ) {
+            nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
+
+            Nanofuzz__output_stack_push( p_stack, p_data );
+
+            free( p_data );   //this data is memcpy'd, so the outer ptr can be freed
+            generated++;
+        }
+
+        return;
+    }
+
+    // 'Refill' types keep the thread alive to replenish the stack as items are taken.
+    while ( 1 ) {
+        // If there's nothing to generate, keep waiting.
+        if ( p_stack->count >= p_stack->size ) {
+            usleep( 10000 );
+            continue;
+        }
+
+        // Generate and push to stack.
+        nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
+        Nanofuzz__output_stack_push( p_stack, p_data );
+
+        free( p_data );
+    }
 }
 
 
 // Push a data pointer onto the stack.
-static int Nanofuzz__output_stack_push( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data ) {
+static int Nanofuzz__output_stack_push(
+    nanofuzz_output_stack_t* p_stack,
+    nanofuzz_data_t* p_data
+) {
+    if ( p_stack->count >= p_stack->size )
+        return 0;
+
+    pthread_mutex_lock( &(p_stack->mutex) );
+
+    memcpy(
+        (p_stack->p_base + (sizeof(nanofuzz_data_t)*(p_stack->count))),
+        p_data,
+        sizeof(nanofuzz_data_t)
+    );
+    p_stack->count++;
+
+    pthread_mutex_unlock( &(p_stack->mutex) );
+    return 1;
 }
 
 
 // Pop the most recent stack item.
-static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_context_t* p_ctx ) {
-}
+static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_output_stack_t* p_stack ) {
+    if ( !(p_stack->count) )  return NULL;
 
+    pthread_mutex_lock( &(p_stack->mutex) );
 
-// Check if the stack is full.
-static int Nanofuzz__output_stack_is_full( nanofuzz_context_t* p_ctx ) {
-}
+    nanofuzz_data_t* p_data = (p_stack->p_base + (sizeof(nanofuzz_data_t)*(p_stack->count)));
+    p_stack->count--;
 
-
-// Check if the stack is empty.
-static int Nanofuzz__output_stack_is_empty( nanofuzz_context_t* p_ctx ) {
+    pthread_mutex_unlock( &(p_stack->mutex) );
+    return p_data;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
