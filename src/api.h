@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _NANOFUZZ_API_H
-#define _NANOFUZZ_API_H
+#ifndef NANOFUZZ_API_H
+#define NANOFUZZ_API_H
 
 #include "pattern.h"
 #include "generator.h"
@@ -28,37 +28,36 @@ typedef struct _fuzz_global_context_t nanofuzz_context_t;
 
 // Create a structure that wraps a linked list, a chain type, and a thread mutex
 //   to control asynchronous ouput generation.
-typedef struct _fuzz_output_chain_t nanofuzz_output_chain_t;
-typedef enum _fuzz_output_chain_type {
+typedef struct _fuzz_output_stack_t nanofuzz_output_stack_t;
+typedef enum _fuzz_output_stack_type {
     oneshot = 1,    /**< Fills the output chain one time and does not interact with it anymore. */
     refill          /**< Asynchronously refills the output chain as items are popped. */
-} nanofuzz_chain_type;
+} nanofuzz_stack_type;
 
 
 
-// Init function; uses the provided string to instantiate a new fuzzer.
-nanofuzz_context_t* Nanofuzz__new( const char* p_pattern, nanofuzz_error_t** pp_err_ctx );
+// Init function; uses the provided string to instantiate a new fuzzer and output stack.
+nanofuzz_context_t* Nanofuzz__new(
+    const char* p_pattern,
+    size_t output_stack_size,
+    nanofuzz_stack_type output_stack_type,
+    nanofuzz_error_t** pp_err_ctx
+);
+
 // Destroy function to free all Nanofuzz context resources.
 void Nanofuzz__delete( nanofuzz_context_t* p_ctx );
 
-// Get a newly-generated item.
+// Get a newly-generated item from the output stack of the context.
 nanofuzz_data_t* Nanofuzz__get_next( nanofuzz_context_t* p_ctx );
 
 // Free generated nanofuzz data. This is a simple wrspper and we leave leak tracking up
 //   to the implementer of the API since DATA blobs are context-independent.
 void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data );
 
-
-/*nanofuzz_output_chain_t* Nanofuzz__generate_chain(
-    nanofuzz_context_t* p_ctx,
-    nanofuzz_chain_type type,
-    size_t size
-);*/
-
-
 // Pass-through/Wrapper function to explain what a fuzzer is doing step-by-step.
+//   This isn't really necessary, but nice to keep the Nanofuzz 'namespace' on the method.
 void Nanofuzz__PatternFactory__explain( FILE* fp_stream, nanofuzz_context_t* p_fuzz_ctx );
 
 
 
-#endif   /* _NANOFUZZ_API_H */
+#endif   /* NANOFUZZ_API_H */

@@ -378,7 +378,11 @@ int main( int argc, char* const argv[] ) {
     fuzz_error_t* p_err_ctx = NULL;
 
     // Parse the input pattern and init a fuzzer context.
-    nanofuzz_context_t* p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_err_ctx );
+    nanofuzz_context_t* p_fuzz_ctx = ( amount_to_generate )
+        ? Nanofuzz__new( p_pattern_contents, amount_to_generate, oneshot, &p_err_ctx )
+        : Nanofuzz__new( p_pattern_contents, 10000, refill, &p_err_ctx )
+    ;
+
     if ( NULL == p_fuzz_ctx ) {
         // If the program can't understand the pattern, die.
         Nanofuzz__delete( p_fuzz_ctx );
@@ -450,7 +454,10 @@ int main( int argc, char* const argv[] ) {
 
             // Create the fuzzer contexts, one per thread.
             //   No need for error context informstion since the above context creation worked.
-            (*(pp_tctx+i))->p_work->p_fuzz_ctx = Nanofuzz__new( p_pattern_contents, &p_dummy_ctx );
+// TODO: Fix this once output chains are done to cycle through completely independent contexts in each thread
+            (*(pp_tctx+i))->p_work->p_fuzz_ctx =
+                Nanofuzz__new( p_pattern_contents, 10000, refill, &p_dummy_ctx );
+
             if ( NULL == (*(pp_tctx+i))->p_work->p_fuzz_ctx )
                 errx( 1, "Failed to create fuzzing context in worker thread #%lu. Aborting.\n", i );
 
