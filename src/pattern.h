@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _FUZZ_PATTERN_H
-#define _FUZZ_PATTERN_H
+#ifndef NANOFUZZ_PATTERN_H
+#define NANOFUZZ_PATTERN_H
 
 #include "fuzz_error.h"
 
@@ -25,6 +25,9 @@
 #define FUZZ_MAX_VARIABLES 16
 // Max amount of different conditions which can be OR'd together with the '|' mechanism.
 #define FUZZ_MAX_STEPS 32
+// Max length of data a pattern is allowed to output in a single iteration.
+//   This also controls the generator context's output size.
+#define FUZZ_MAX_OUTPUT_SIZE ((1 << 32) - 1)
 
 
 
@@ -67,6 +70,9 @@ typedef struct _fuzz_factory_t {
     void* node_seq;
     // ... of size count, each = sizeof(fuzz_pattern_block_t)
     size_t count;
+    // Size needed for an associated generator context to allocate in its data pool.
+    //   Represents the combined possible data output size.
+    size_t max_output_size;
     // List of references attached to this factory as sub-factories by variable name.
     List_t* ref_shards;
     // See struct definition above.
@@ -163,4 +169,4 @@ void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 
 
 
-#endif   /* _FUZZ_PATTERN_H */
+#endif   /* NANOFUZZ_PATTERN_H */

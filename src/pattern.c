@@ -131,6 +131,27 @@ static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t*
 
 
 
+// Get the maximum possible output size for a single pattern block from the factory.
+//   These are summed to produce an allocation pool size for the generator context,
+//   which is capped at a limit set in the pattern Header file.
+static inline size_t __PatternBlock__get_possible_output_size( fuzz_pattern_block_t* p_block ) {
+    if ( NULL == p_block )  return 0;
+
+    switch ( p_block->type ) {
+        case ret:
+        case end:
+        case branch_root:
+            return 0;
+    }
+
+    if ( ret == p_block->type || end == p_block->type )
+        return 0;
+
+    return 0;
+}
+
+
+
 // Compress the contents of a pattern block list into a single calloc and set it in the factory.
 static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     if ( NULL == p_list )  return NULL;
@@ -153,17 +174,49 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     if ( NULL == p_data )
         goto __compress_err;
 
-    // Quickly verify types.
+    // Quickly verify types and get the maximum possible block size. If an overflow is
+    //   possible, or if there are any invalid block types, then error.
+    size_t possible_generation_size = 0;
+    // Each time a sub block is encountered, its 'high' (max) possible count is added to a multiplier.
+    //   'ret' blocks will drop the multiplier.
+    unsigned short nest_level = 0;
+    size_t nest_multipliers[FUZZ_MAX_NESTING_COMPLEXITY];
+    memset( &(nest_multipliers[0]), 0, FUZZ_MAX_NESTING_COMPLEXITY*sizeof(size_t) );
+
     for ( size_t x = 0; x < len; x++ ) {
         fuzz_pattern_block_t* p_block =
             (fuzz_pattern_block_t*)(p_data + (x * sizeof(fuzz_pattern_block_t)));
 
         if ( (pattern_block_type)NULL == p_block->type || end == p_block->type )
             goto __compress_err;
+
+        if ( sub == p_block->type ) {
+            nest_multipliers[nest_level] = (p_block->count).high;
+            nest_level++;
+        } else if ( ret == p_block->type ) {
+            nest_multipliers[nest_level] = 1;
+            nest_level--;
+        } else {
+            size_t total_multiplier = 0;
+            for ( unsigned short x = 0; x < nest_level; x++ )
+                total_multiplier += nest_multipliers[x];
+
+            possible_generation_size += (
+                total_multiplier * __PatternBlock__get_possible_output_size( p_block )
+            );
+
+            if ( possible_generation_size >= FUZZ_MAX_OUTPUT_SIZE )
+                goto __compress_err;
+        }
+
+        // Checks for overstep and underflow of the nest level.
+        if ( nest_level > FUZZ_MAX_NESTING_COMPLEXITY )
+            goto __compress_err;
     }
 
-    // Set the node sequence pointer to the linear array.
+    // Set the node sequence pointer to the linear array, and the max output size.
     x->node_seq = p_data;
+    x->max_output_size = possible_generation_size;
 
     // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
     //   it encountered a terminal point.

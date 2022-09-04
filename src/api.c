@@ -22,6 +22,7 @@ struct _fuzz_output_stack_t {
     size_t count;
     nanofuzz_stack_type type;
     pthread_mutex_t mutex;
+    size_t is_error;
 };
 
 // Define a structure which encapsulates the parent factory and gen ctx.
@@ -80,6 +81,7 @@ nanofuzz_context_t* Nanofuzz__new(
     p_stack->type = output_stack_type;
     p_stack->count = 0;
     p_stack->size = output_stack_size;
+    p_stack->is_error = 0;
     p_stack->data_size = (sizeof(nanofuzz_data_t) * output_stack_size);
 
     p_stack->p_base = calloc( 1, p_stack->data_size );
@@ -99,9 +101,11 @@ nanofuzz_context_t* Nanofuzz__new(
     // Temporarily wait until the generator is done.
     volatile unsigned long long int x = 0;
     while ( x < 0xFFFFFFFFFFFFFFF0 && p_stack->count < p_stack->size ) {
-        usleep( 1000 );
+        usleep( 100 );
         x++;
     }
+
+    // Check for error conditions (such as generator overflow).
 
     // Return the allocated context.
     return p_ctx;
@@ -201,6 +205,11 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
 
         // Generate and push to stack.
         nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
+        if ( NULL == p_data ) {
+            p_stack->is_error = 1;
+            return;
+        }
+
         Nanofuzz__output_stack_push( p_stack, p_data );
 
         free( p_data );
