@@ -59,8 +59,7 @@ nanofuzz_context_t* Nanofuzz__new(
     )  goto __context_new_err;
 
     // Create a new fuzzer context.
-    nanofuzz_context_t* p_ctx = (nanofuzz_context_t*)calloc(
-        1, sizeof(nanofuzz_context_t) );
+    nanofuzz_context_t* p_ctx = (nanofuzz_context_t*)calloc( 1, sizeof(nanofuzz_context_t) );
     if ( NULL == p_ctx )
         goto __context_new_err;
 
@@ -75,12 +74,15 @@ nanofuzz_context_t* Nanofuzz__new(
 
     // Allocate and set up the stack. The size is sizeof(data)*output_stack_size.
     nanofuzz_output_stack_t* p_stack = &(p_ctx->_stack);
+
     pthread_mutex_init( &(p_stack->mutex), NULL );
+
     p_stack->type = output_stack_type;
     p_stack->count = 0;
     p_stack->size = output_stack_size;
     p_stack->data_size = (sizeof(nanofuzz_data_t) * output_stack_size);
-    p_stack->p_base = calloc( 1, p_stack->size );
+
+    p_stack->p_base = calloc( 1, p_stack->data_size );
     if ( NULL == p_stack->p_base )
         goto __context_new_err;
 
@@ -90,26 +92,35 @@ nanofuzz_context_t* Nanofuzz__new(
     pthread_attr_setdetachstate( &tattr, 1 );
 
     int rc = pthread_create( &(p_ctx->_generator), &tattr,
-        &Nanofuzz__thread_refresh_context, p_ctx );
+        Nanofuzz__thread_refresh_context, p_ctx );
     if ( rc )
         goto __context_new_err;
+
+    // Temporarily wait until the generator is done.
+    volatile unsigned long long int x = 0;
+    while ( x < 0xFFFFFFFFFFFFFFF0 && p_stack->count < p_stack->size ) {
+        usleep( 1000 );
+        x++;
+    }
 
     // Return the allocated context.
     return p_ctx;
 
     // Jumped to on any error init'ing the ctx.
     __context_new_err:
-        if ( NULL != p_ctx )
-            free( (p_ctx->_stack).p_base );
-        free( p_ctx );
+        Nanofuzz__delete( p_ctx );
         return NULL;
 }
 
 
 // Destroy function to free all Nanofuzz context resources.
 void Nanofuzz__delete( nanofuzz_context_t* p_ctx ) {
-    if ( NULL != p_ctx )
+    if ( NULL != p_ctx ) {
+        free( (p_ctx->_stack).p_base );
+        (p_ctx->_stack).p_base = NULL;
+
         Generator__delete_context( p_ctx->_p_gen_ctx );   //also deletes factory resources
+    }
 
     free( p_ctx );
 }
@@ -119,7 +130,7 @@ void Nanofuzz__delete( nanofuzz_context_t* p_ctx ) {
 nanofuzz_data_t* Nanofuzz__get_next( nanofuzz_context_t* p_ctx ) {
     if ( NULL == p_ctx )  return NULL;
 
-    return Generator__get_next( p_ctx->_p_gen_ctx );
+    return Nanofuzz__output_stack_pop( &(p_ctx->_stack) );
 }
 
 

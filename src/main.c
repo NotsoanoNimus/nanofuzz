@@ -384,9 +384,7 @@ int main( int argc, char* const argv[] ) {
     ;
 
     if ( NULL == p_fuzz_ctx ) {
-        // If the program can't understand the pattern, die.
-        Nanofuzz__delete( p_fuzz_ctx );
-
+printf("NULL CTX\n" );
         Error__print( p_err_ctx, stderr );
 
         free( p_output_file );

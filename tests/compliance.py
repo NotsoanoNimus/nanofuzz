@@ -272,7 +272,7 @@ for file in os.listdir( myfullpath + "/compliance/" ):
     sys.stdout.flush()
 
     call_ec = 255
-    fuzzer_call = ( myfullpath + "/../bin/nanofuzz -t 4 -f " + myfullpath+"/compliance/"+file
+    fuzzer_call = ( myfullpath + "/../bin/nanofuzz -f " + myfullpath+"/compliance/"+file
         + " -l " + str(iters) + " -o " + myfullpath+"/compliance/"
         + re.sub(r'(?i)\.txt$', '', file) + "*.gen >&/dev/null" )
 

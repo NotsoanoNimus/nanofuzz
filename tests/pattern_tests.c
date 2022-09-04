@@ -26,7 +26,6 @@
         const char* p_str = thepattern; \
         nanofuzz_context_t* p_ctx = Nanofuzz__new( p_str, 1, oneshot, &p_err_ctx ); \
         cr_assert( NULL == p_ctx, "The nanofuzz context must be invalid for this input." ); \
-        Nanofuzz__delete( p_ctx ); \
     }
 
 // Test for conditions where the generator overflows or otherwise dies.
@@ -45,11 +44,11 @@
 #define TEST_VALID(name,thepattern) \
     Test(valid_pattern,name) { \
         const char* p_str = thepattern; \
-        nanofuzz_context_t* p_ctx = Nanofuzz__new( p_str, 1, oneshot, &p_err_ctx ); \
+        nanofuzz_context_t* p_ctx = Nanofuzz__new( p_str, 100, oneshot, &p_err_ctx ); \
         cr_assert( NULL != p_ctx, "The nanofuzz context is not valid for this input." ); \
-        for ( int i = 0; i < 10; i++ ) {\
+        for ( int i = 0; i < 100; i++ ) {\
             nanofuzz_data_t* p_data = Nanofuzz__get_next( p_ctx ); \
-            cr_assert( NULL != p_ctx, "Generated fuzzer data cannot be NULL." ); \
+            cr_assert( NULL != p_data, "Generated fuzzer data cannot be NULL." ); \
         } \
         Nanofuzz__delete( p_ctx ); \
     }
