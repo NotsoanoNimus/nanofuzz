@@ -33,7 +33,7 @@ typedef struct _fuzz_reference_shard_t {
 
 // Creates a context for a fuzzing pattern parser. This is so static variables
 //   don't step on each other in case multiple patterns are being initialized by this library at once.
-struct _fuzz_ctx_t {
+typedef struct _fuzz_parser_ctx_t {
     // Tracks an overall context's nesting hierarchy; entry points for each layer as it builds.
     //   These values are intended to be ephemeral pointers used just while building the factory.
     fuzz_pattern_block_t** p_nest_tracker;
@@ -41,7 +41,7 @@ struct _fuzz_ctx_t {
     size_t nest_level;
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
-};
+} fuzz_parser_ctx_t;
 
 
 
@@ -49,8 +49,8 @@ struct _fuzz_ctx_t {
 static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, const char* p_content, int comma );
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
 static int __branch_write_end( List_t* p_seq, fuzz_pattern_block_t* p_branch_root_block,
-    struct _fuzz_ctx_t* const p_ctx, int is_post_run );
-static List_t* __parse_pattern( struct _fuzz_ctx_t* const p_ctx, const char* p_pattern, List_t* const ll_shards );
+    fuzz_parser_ctx_t* const p_ctx, int is_post_run );
+static List_t* __parse_pattern( fuzz_parser_ctx_t* const p_ctx, const char* p_pattern, List_t* const ll_shards );
 
 
 
@@ -99,19 +99,19 @@ static char __escape_to_value( char esc ) {
 
 
 // Generate a fresh parsing context. For now, inline is OK.
-static inline struct _fuzz_ctx_t* const __Context__new() {
-    struct _fuzz_ctx_t* p_ctx = (struct _fuzz_ctx_t*)calloc( 1, sizeof(struct _fuzz_ctx_t) );
+static inline fuzz_parser_ctx_t* const __ParserContext__new() {
+    fuzz_parser_ctx_t* p_ctx = (fuzz_parser_ctx_t*)calloc( 1, sizeof(fuzz_parser_ctx_t) );
 
     p_ctx->p_nest_tracker = (fuzz_pattern_block_t**)calloc(
         FUZZ_MAX_NESTING_COMPLEXITY, sizeof(fuzz_pattern_block_t*) );
     p_ctx->nest_level = 0;
     p_ctx->p_err = Error__new();
 
-    return (struct _fuzz_ctx_t* const)p_ctx;
+    return (fuzz_parser_ctx_t* const)p_ctx;
 }
 
 // Destroy a context. This frees the context, error handler (if no errors), & tracker.
-static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
+static inline void __ParserContext__delete( fuzz_parser_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
     if ( NULL != p ) {
         if ( p->p_nest_tracker ) {
             free( p->p_nest_tracker );
@@ -127,27 +127,6 @@ static inline void __Context__delete( struct _fuzz_ctx_t* const p, fuzz_error_t*
 
         free( (void*)p );
     }
-}
-
-
-
-// Get the maximum possible output size for a single pattern block from the factory.
-//   These are summed to produce an allocation pool size for the generator context,
-//   which is capped at a limit set in the pattern Header file.
-static inline size_t __PatternBlock__get_possible_output_size( fuzz_pattern_block_t* p_block ) {
-    if ( NULL == p_block )  return 0;
-
-    switch ( p_block->type ) {
-        case ret:
-        case end:
-        case branch_root:
-            return 0;
-    }
-
-    if ( ret == p_block->type || end == p_block->type )
-        return 0;
-
-    return 0;
 }
 
 
@@ -174,49 +153,9 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
     if ( NULL == p_data )
         goto __compress_err;
 
-    // Quickly verify types and get the maximum possible block size. If an overflow is
-    //   possible, or if there are any invalid block types, then error.
-    size_t possible_generation_size = 0;
-    // Each time a sub block is encountered, its 'high' (max) possible count is added to a multiplier.
-    //   'ret' blocks will drop the multiplier.
-    unsigned short nest_level = 0;
-    size_t nest_multipliers[FUZZ_MAX_NESTING_COMPLEXITY];
-    memset( &(nest_multipliers[0]), 0, FUZZ_MAX_NESTING_COMPLEXITY*sizeof(size_t) );
-
-    for ( size_t x = 0; x < len; x++ ) {
-        fuzz_pattern_block_t* p_block =
-            (fuzz_pattern_block_t*)(p_data + (x * sizeof(fuzz_pattern_block_t)));
-
-        if ( (pattern_block_type)NULL == p_block->type || end == p_block->type )
-            goto __compress_err;
-
-        if ( sub == p_block->type ) {
-            nest_multipliers[nest_level] = (p_block->count).high;
-            nest_level++;
-        } else if ( ret == p_block->type ) {
-            nest_multipliers[nest_level] = 1;
-            nest_level--;
-        } else {
-            size_t total_multiplier = 0;
-            for ( unsigned short x = 0; x < nest_level; x++ )
-                total_multiplier += nest_multipliers[x];
-
-            possible_generation_size += (
-                total_multiplier * __PatternBlock__get_possible_output_size( p_block )
-            );
-
-            if ( possible_generation_size >= FUZZ_MAX_OUTPUT_SIZE )
-                goto __compress_err;
-        }
-
-        // Checks for overstep and underflow of the nest level.
-        if ( nest_level > FUZZ_MAX_NESTING_COMPLEXITY )
-            goto __compress_err;
-    }
-
     // Set the node sequence pointer to the linear array, and the max output size.
     x->node_seq = p_data;
-    x->max_output_size = possible_generation_size;
+    x->max_output_size = 0;
 
     // One final element on the blob needs to be an 'end' node so the generator can be CERTAIN
     //   it encountered a terminal point.
@@ -238,33 +177,83 @@ static fuzz_factory_t* __compress_List_to_factory( List_t* p_list ) {
 
 
 
-// Return the private size of the fuzz factory structure.
-size_t PatternFactory__sizeof(void) {
-    return sizeof(fuzz_factory_t);
-}
+// Get max possible size for the factory's content generation.
+static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff ) {
+    if ( NULL == p_ff )  return 0;
+
+    // Quickly verify types and get the maximum possible block size. If an overflow is
+    //   possible, or if there are any invalid block types, then error.
+    size_t possible_generation_size = 0, total_multiplier = 1;
+    // Each time a sub block is encountered, its 'high' (max) possible count is added to a multiplier.
+    //   'ret' blocks will drop the multiplier.
+    unsigned short nest_level = 0;
+    size_t nest_multipliers[FUZZ_MAX_NESTING_COMPLEXITY];
+    memset( &(nest_multipliers[0]), 0, FUZZ_MAX_NESTING_COMPLEXITY*sizeof(size_t) );
+
+    for ( size_t x = 0; x < p_ff->count; x++ ) {
+        fuzz_pattern_block_t* p_block =
+            (fuzz_pattern_block_t*)(p_ff->node_seq + (x * sizeof(fuzz_pattern_block_t)));
+
+        if ( (pattern_block_type)NULL == p_block->type || end == p_block->type )
+            goto __length_err;
+
+        switch ( p_block->type ) {
+            case sub : {
+                nest_multipliers[nest_level] = (p_block->count).high;
+                total_multiplier *= nest_multipliers[nest_level];
+                nest_level++;
+                break;
+            }
+            case ret : {
+                total_multiplier /= nest_multipliers[nest_level];
+                nest_multipliers[nest_level] = 0;
+                nest_level--;
+                break;
+            }
+            case branch_root : {
+                break;
+            }
+            case branch_jmp : {
+                break;
+            }
+            case reference : {
+                fuzz_reference_t* p_x = (fuzz_reference_t*)(p_block->data);
+                if ( ref_declaration == p_x->type || ref_shuffle == p_x->type )
+                    break;
+
+                // Get the attached sub-factory, which should have its own max_output_size to
+                //   multiply against the nest multipliers.
+//                if (  List__length( p_
+            }
+            default : {
+                // Static strings, ranges, and wildcards. The high value is multiplied
+                //   by the high count of the surrounding nests.
+                //   Ex: (abc(de{1,5}f){,3}){4,5} --> 'e' will count 75 (5x3x5) possible times.
+                possible_generation_size += (total_multiplier * (p_block->count).high);
+
+                break;
+            }
+
+            if ( possible_generation_size >= FUZZ_MAX_OUTPUT_SIZE )
+                goto __length_err;
+        }
+
+        // Checks for overstep and underflow of the nest level.
+        if ( nest_level > FUZZ_MAX_NESTING_COMPLEXITY )
+            goto __length_err;
+    }
+
+    // Set the maximum output size and return it. Problem on 0.
+    if ( 0 == possible_generation_size )
+        goto __length_err;
+
+    p_ff->max_output_size = possible_generation_size;
+    return possible_generation_size;
 
 
-// Get the blob data from the given fuzz factory struct.
-void* PatternFactory__get_data( fuzz_factory_t* p_fact ) {
-    return p_fact->node_seq;
-}
-
-
-// Get the size of the pattern factory's data blob.
-size_t PatternFactory__get_data_size( fuzz_factory_t* p_fact ) {
-    return (size_t)(p_fact->count * sizeof(fuzz_pattern_block_t));
-}
-
-
-// Get the attached factory count of blobbed pattern blocks.
-size_t PatternFactory__get_count( fuzz_factory_t* p_fact ) {
-    return p_fact->count;
-}
-
-
-// Get the shard index pointer for the factory.
-void* PatternFactory__get_shard_index_ptr( fuzz_factory_t* p_fact ) {
-    return &(p_fact->shard_idx[0]);
+    // This label is not necessary, but is left in case a different error condition is used later.
+    __length_err:
+        return 0;
 }
 
 
@@ -534,7 +523,7 @@ static void __pf_new_shards( void* p_data, void* p_input, void** pp_results );
 fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** pp_err ) {
 
     // Create a new pattern context.
-    struct _fuzz_ctx_t* const p_ctx = __Context__new();
+    fuzz_parser_ctx_t* const p_ctx = __ParserContext__new();
 
 
     // If a pointer to capture the error handler is given, point it properly.
@@ -565,8 +554,16 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     }
 
 
+    // Get the max possible output size of the factory.
+    size_t max_size = __PatternFactory__get_max_output_size( p_ff );
+    if ( !max_size ) {
+        PatternFactory__delete( p_ff );
+        p_ff = NULL;
+    }
+
+
     // Discard the context since a pointer to the err ctx is available.
-    __Context__delete( p_ctx, pp_err );
+    __ParserContext__delete( p_ctx, pp_err );
 
 
     // Return the factory.
@@ -638,7 +635,7 @@ static const char special_chars[] = "|\\[{(<>)}]";
 // Internal, recursive pattern parsing. This is called recursively generally
 //   when the nesting level () changes.
 static List_t* __parse_pattern(
-    struct _fuzz_ctx_t* const p_ctx,
+    fuzz_parser_ctx_t* const p_ctx,
     const char* p_pattern,
     List_t* const ll_shards
 ) {
@@ -690,6 +687,7 @@ static List_t* __parse_pattern(
                 p_new_block->type = string;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
 
                 if ( 'x' == esc || 'X' == esc ) {
                     if ( !isxdigit( (int)*(p+2) ) || !isxdigit( (int)*(p+3) ) ) {
@@ -1157,6 +1155,7 @@ static List_t* __parse_pattern(
                 p_new_block->type = range;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
 
                 int res = __range_parse_range( p_new_block, &t );
@@ -1259,6 +1258,7 @@ static List_t* __parse_pattern(
                 p_new_block->type = sub;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
                 *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
 
                 // Set the content of the sub's data to the length of its members.
@@ -1365,6 +1365,7 @@ static List_t* __parse_pattern(
                 p_new_block->data = z;
                 (p_new_block->count).single = 1;
                 (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
 
                 // If a static character is hit at the end of a branch and its >1 char long,
                 //   snip the string and reset p. The '2==is_...' means this string is JUST AFTER
@@ -1912,7 +1913,7 @@ static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_blo
 static int __branch_write_end(
     List_t* p_seq,
     fuzz_pattern_block_t* p_branch_root_block,
-    struct _fuzz_ctx_t* const p_ctx,
+    fuzz_parser_ctx_t* const p_ctx,
     int is_post_run
 ) {
 printf( "P1 |%d|\n", is_post_run );
