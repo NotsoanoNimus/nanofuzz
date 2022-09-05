@@ -235,6 +235,7 @@ static int Nanofuzz__output_stack_push(
     p_stack->count++;
 
     pthread_mutex_unlock( &(p_stack->mutex) );
+
     return 1;
 }
 
@@ -248,7 +249,11 @@ static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_output_stack_t* p_s
     nanofuzz_data_t* p_data = (p_stack->p_base + (sizeof(nanofuzz_data_t)*(p_stack->count)));
     p_stack->count--;
 
+    nanofuzz_data_t* p_data_copy = (nanofuzz_data_t*)calloc( 1, sizeof(nanofuzz_data_t) );
+    memcpy( p_data_copy, p_data, sizeof(nanofuzz_data_t) );
+
     pthread_mutex_unlock( &(p_stack->mutex) );
+
     return p_data;
 }
 
