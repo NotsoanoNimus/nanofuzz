@@ -19,18 +19,6 @@
 
 
 
-// A piece of disparate gen_ctx objects attached to a fuzz_factory as sub-factories.
-typedef struct _fuzz_reference_shard_t {
-    // The string label assigned to this generator context. This is mapped from
-    //   the fuzz_reference_t to get the context's generator as needed.
-    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
-    // The generator context to use when shuffling the variable or initializing it.
-    //   Since this stands on its own apart from the primary factory and generator,
-    //   a special process is required to 'free' this when the outer factory is
-    //   being deleted and this instance's type is a 'declaration'.
-    fuzz_gen_ctx_t* p_gen_ctx;
-} fuzz_ref_shard_t;
-
 // Creates a context for a fuzzing pattern parser. This is so static variables
 //   don't step on each other in case multiple patterns are being initialized by this library at once.
 typedef struct _fuzz_parser_ctx_t {
@@ -39,6 +27,10 @@ typedef struct _fuzz_parser_ctx_t {
     fuzz_pattern_block_t** p_nest_tracker;
     // Tracks the index into the above, preventing over-complexity of input patterns.
     size_t nest_level;
+    // Array of subcontexts.
+    fuzz_subcontext_t subcontexts[FUZZ_MAX_SUBCONTEXTS];
+    // Amount of references declared as subcontexts.
+    size_t subcontexts_count;
     // Context-dependent pattern error handler.
     fuzz_error_t* p_err;
 } fuzz_parser_ctx_t;
@@ -50,7 +42,7 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, co
 static inline int __range_parse_range( fuzz_pattern_block_t* const p_pattern_block, const char** pp_content );
 static int __branch_write_end( List_t* p_seq, fuzz_pattern_block_t* p_branch_root_block,
     fuzz_parser_ctx_t* const p_ctx, int is_post_run );
-static List_t* __parse_pattern( fuzz_parser_ctx_t* const p_ctx, const char* p_pattern, List_t* const ll_shards );
+static List_t* __parse_pattern( fuzz_parser_ctx_t* const p_ctx, const char* p_pattern );
 
 
 
@@ -110,12 +102,17 @@ static inline fuzz_parser_ctx_t* const __ParserContext__new() {
     return (fuzz_parser_ctx_t* const)p_ctx;
 }
 
-// Destroy a context. This frees the context, error handler (if no errors), & tracker.
+// Destroy a context. This frees the context, subfactories, error handler (if no errors), & tracker.
 static inline void __ParserContext__delete( fuzz_parser_ctx_t* const p, fuzz_error_t** pp_saveptr ) {
     if ( NULL != p ) {
         if ( p->p_nest_tracker ) {
             free( p->p_nest_tracker );
             p->p_nest_tracker = NULL;
+        }
+
+        if ( p->subcontexts_count > 0 ) {
+            for ( size_t i = 0; i < p->subcontexts_count; i++ )
+                Generator__delete_context(  (p->subcontexts[i]).p_gen_ctx  );
         }
 
         if (  NULL != p->p_err && 0 == Error__has_error( p->p_err )  ) {
@@ -259,8 +256,6 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
 
 
 // Frees space used by a pattern factory by destroying it and its nodes' datas from the heap.
-static void __pf_delete_action( void* p_data, void* p_input, void** pp_results );
-
 void PatternFactory__delete( fuzz_factory_t* p_fact ) {
     if ( NULL == p_fact )  return;
 
@@ -277,12 +272,12 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
         }
     }
 
-    // Delete all the variables and factories attached as variables.
-    if ( NULL != p_fact->ref_shards ) {
-        List__for_each( p_fact->ref_shards, NULL, NULL, &__pf_delete_action, NULL );
-
-        List__delete_deep( &(p_fact->ref_shards) );
-        p_fact->ref_shards = NULL;
+    // Delete all subcontexts.
+    if ( p_fact->subcontexts_count > 0 ) {
+        for ( size_t i = 0; i < p_fact->subcontexts_count; i++ ) {
+            Generator__delete_context(  (p_fact->subcontexts[i]).p_gen_ctx  );
+            (p_fact->subcontexts[i]).p_gen_ctx = NULL;
+        }
     }
 
     // Free the pattern_block blob.
@@ -295,21 +290,9 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
     free( p_fact );
 }
 
-static void __pf_delete_action( void* p_data, void* p_input, void** pp_results ) {
-    if ( NULL != p_data ) {
-        fuzz_gen_ctx_t* p_gen_ctx = ((fuzz_ref_shard_t*)p_data)->p_gen_ctx;
-
-        Generator__delete_context( p_gen_ctx );
-        ((fuzz_ref_shard_t*)p_data)->p_gen_ctx = NULL;
-    }
-}
 
 
-
-// Explain step-by-step what the fuzz factory is doing to generate strings through the given factory.
-//   TODO: So much indirection here; review and refactor from a higher level.
-static void __pf_explain_action( void* p_data, void* p_input, void** pp_results );
-
+// Explain step-by-step what the fuzz factory is doing to generate data through the given factory.
 void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     if ( NULL == p_fact ) {
         fprintf( fp_stream, "The pattern factory is NULL.\n" );
@@ -317,14 +300,19 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     }
 
     // Recursively explain attached sub-factories.
-    if (
-           NULL != p_fact->ref_shards
-        && List__length( p_fact->ref_shards ) > 0
-    ) {
+    if ( p_fact->subcontexts_count > 0 ) {
         fprintf(  fp_stream, "@=@=@=@ Factory contains [%lu] associated sub-factories. @=@=@=@\n",
-            List__length( p_fact->ref_shards )  );
+            p_fact->subcontexts_count  );
 
-        List__for_each( p_fact->ref_shards, NULL, fp_stream, &__pf_explain_action, NULL );
+        for ( size_t i = 0; i < p_fact->subcontexts_count; i++ ) {
+            fuzz_factory_t* p_subfact =
+                Generator__get_context_factory(  (p_fact->subcontexts[i]).p_gen_ctx  );
+
+            fprintf(  fp_stream, "\n===> Sub-factory '%s':\n",
+                (p_fact->subcontexts[i]).label  );
+
+            PatternFactory__explain( fp_stream, p_subfact );
+        }
 
         fprintf( fp_stream, "\n\n" );
         fprintf( fp_stream, "********** Parent Factory **********\n" );
@@ -500,23 +488,7 @@ void PatternFactory__explain( FILE* fp_stream, fuzz_factory_t* p_fact ) {
     }
 }
 
-static void __pf_explain_action( void* p_data, void* p_input, void** pp_results ) {
-    fuzz_factory_t* p_subfact =
-        Generator__get_context_factory(  ((fuzz_ref_shard_t*)p_data)->p_gen_ctx  );
 
-    fprintf(  (FILE*)p_input, "\n===> Sub-factory '%s':\n",
-        ((fuzz_ref_shard_t*)p_data)->label  );
-
-    PatternFactory__explain( (FILE*)p_input, p_subfact );
-}
-
-
-
-struct __pf_new_shards_pkg {
-    fuzz_factory_t* p_ff;
-    size_t counter;
-};
-static void __pf_new_shards( void* p_data, void* p_input, void** pp_results );
 
 // Build the fuzz factory. Since this is only intended to run as part of the
 //   wind-up cycle, optimization is not an essential concern here.
@@ -525,90 +497,57 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     // Create a new pattern context.
     fuzz_parser_ctx_t* const p_ctx = __ParserContext__new();
 
-
     // If a pointer to capture the error handler is given, point it properly.
     if ( pp_err && NULL == *pp_err )
         *pp_err = p_ctx->p_err;
 
 
-    // Parse the pattern and manufacture the factory (meta). MAGIC!
-    List_t* ll_shards = List__new( FUZZ_MAX_VARIABLES );
-
-    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str, ll_shards );
+    // Parse the pattern and manufacture the factory. MAGIC!
+    List_t* p_the_sequence = __parse_pattern( p_ctx, p_pattern_str );
 
     fuzz_factory_t* p_ff = __compress_List_to_factory( p_the_sequence );
-
-
-    // If any sub-factories are attached, index their labels into the shard_idx.
-    // NOTE: This also replicates the pointer to shard_idx into each child factory.
-    // TODO: Cleanup, consolidate, and consider turning the primary hashtable into a single alloc
-    if (  NULL != p_ff && List__length( ll_shards ) > 0  ) {
-        struct __pf_new_shards_pkg _shard_pkg = { .p_ff = p_ff, .counter = 0 };
-
-        List__for_each( ll_shards, NULL, (void*)&_shard_pkg, &__pf_new_shards, NULL );
-        p_ff->ref_shards = ll_shards;
-    } else {
-        if (  List__length( ll_shards ) > 0  )
-            List__for_each( ll_shards, NULL, NULL, &__pf_delete_action, NULL );
-        List__delete_deep( &ll_shards );
+    if ( NULL == p_ff ) {
+        __ParserContext__delete( p_ctx, pp_err );
+        return NULL;
     }
 
+    // Fetch subcontexts and attach to the factory.
+    //   After copying it over, be sure to nullify the parser context's count for it.
+    //   This is because the pointers go to the same place and we don't want a double-free.
+    memcpy( &(p_ff->subcontexts[0]), &(p_ctx->subcontexts[0]),
+        sizeof(fuzz_subcontext_t)*FUZZ_MAX_SUBCONTEXTS );
+    p_ff->subcontexts_count = p_ctx->subcontexts_count;
+    p_ctx->subcontexts_count = 0;
 
+/*
     // Get the max possible output size of the factory.
     size_t max_size = __PatternFactory__get_max_output_size( p_ff );
     if ( !max_size ) {
         PatternFactory__delete( p_ff );
         p_ff = NULL;
     }
-
+*/
 
     // Discard the context since a pointer to the err ctx is available.
     __ParserContext__delete( p_ctx, pp_err );
-
 
     // Return the factory.
     return p_ff;
 
 }
 
-static void __pf_new_shards( void* p_data, void* p_input, void** pp_results ) {
-        if ( NULL == p_data || NULL == p_input )  return;
 
-        struct __pf_new_shards_pkg* p_pkg = (struct __pf_new_shards_pkg*)p_input;
-        fuzz_factory_t* p_ff = p_pkg->p_ff;
-        size_t count = p_pkg->counter;
 
-        // The iterable type here is a ref_shard.
-        fuzz_ref_shard_t* p_ref = (fuzz_ref_shard_t*)p_data;
-        char* p_label = &(p_ref->label[0]);
+// Return the pointer to a generator context attached to a pattern factory as a subcontext.
+void* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label ) {
+    if ( NULL == p_factory )  return NULL;
 
-        // Call the same minimalistic hash function used in the Generator file.
-        //   Using the 'djb2' hashing algorithm.
-        unsigned long hash = 5381;
-        int c;
-        while ( (c = *p_label++) )
-            hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-
-        // Use the computed label hash to create an association.
-        _hash_to_gen_ctx_t* p_idx = (_hash_to_gen_ctx_t*)&(p_ff->shard_idx[count]);
-        p_idx->_hash = hash;
-        p_idx->_ctx  = p_ref->p_gen_ctx;
-
-        // Get the generator context's associated Fuzz Factory.
-        //   Then replicate the parent factory's shard index to the sub-factory in the same index.
-        //   TODO: This hack is inefficient and gross. Can it be fixed?
-        fuzz_factory_t* p_subfact = Generator__get_context_factory( p_ref->p_gen_ctx );
-        if ( NULL != p_subfact ) {
-            printf( "Retrieved shard for index '%lu' with name '%s'.\n", count, &(p_ref->label[0]) );
-            memcpy(
-                &(p_subfact->shard_idx[count]),
-                &(p_ff->shard_idx[count]),
-                sizeof(_hash_to_gen_ctx_t)
-            );
+    for ( size_t i = 0; i < p_factory->subcontexts_count; i++ ) {
+        if (  0 == strcmp( &((p_factory->subcontexts[i]).label[0]), p_label )  ) {
+            // This will never NOT be a gen ctx pointer, so doing a void* cast doesn't matter.
+            return (void*)((p_factory->subcontexts[i]).p_gen_ctx);
         }
-
-        // Increment the counter for the next iteration.
-        (p_pkg->counter)++;
+    }
 }
 
 
@@ -636,8 +575,7 @@ static const char special_chars[] = "|\\[{(<>)}]";
 //   when the nesting level () changes.
 static List_t* __parse_pattern(
     fuzz_parser_ctx_t* const p_ctx,
-    const char* p_pattern,
-    List_t* const ll_shards
+    const char* p_pattern
 ) {
 
     size_t len, nest_level;
@@ -840,11 +778,19 @@ static List_t* __parse_pattern(
                     }
                 }
 
+                // Get a hash of the variable name using the 'djb2' method.
+                char* p_varname_tmp = p_varname;
+                unsigned long hash = 5381;
+                int c;
+                while ( (c = *p_varname_tmp++) )
+                    hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
+
                 // Create the reference data, attach info as necessary.
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)calloc( 1, sizeof(fuzz_reference_t) );
                 memcpy ( &(p_ref->label[0]), p_varname,
                     strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
                 p_ref->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
+                p_ref->hash = hash;
 
                 // Spin up the new block and attach the new reference data.
                 p_new_block = NEW_PATTERN_BLOCK;
@@ -907,23 +853,21 @@ static List_t* __parse_pattern(
                             VAR_ERR( "Declarations '<$...>' cannot be defined within subsequence '()' mechanisms" );
                         }
 
-                        // Ensure a variable by this explicit name doesn't already exist on the current factory.
-                        for ( size_t i = 0; i < List__length( ll_shards ); i++ ) {
-                            fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_at( ll_shards, i );
-
-                            if ( NULL != p_shard ) {
-                                if ( 0 == strcmp( p_varname, &(p_shard->label[0]) )  ) {
-                                    VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
-                                }
+                        // Ensure a variable with this name's hash isn't already defined.
+                        for ( size_t i = 0; i < p_ctx->subcontexts_count; i++ ) {
+                            if ( hash == (p_ctx->subcontexts[i]).hash ) {
+                                VAR_ERR( "Variable declarations '<$...>' must be named uniquely" );
                             }
                         }
 
                         // Another check: throw an error if this declaration exceeds the arraylist limitation.
-                        //   TODO: Fix static '16' in this string
-                        if ( List__length( ll_shards ) >= FUZZ_MAX_VARIABLES ) {
-                            VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 16" );
+                        //   TODO: Fix static '32' in this string
+                        if ( p_ctx->subcontexts_count >= FUZZ_MAX_SUBCONTEXTS ) {
+                            VAR_ERR( "Variable declarations '<$...>' exceed the maximum limit of 32" );
                         }
 
+                        // Now need to drop all the blocks added by this sub's/declaration's () content,
+                        //   since it will reside in its own context.
                         // The count of list items to be deleted lives in the data of the 'ret' pattern
                         //   block, +1 for the 'ret' itself, and ultimately +1 for the preceding 'sub' block.
                         for ( size_t del = (*((size_t*)(p_ret->data)) + 2); del > 0; del-- ) {
@@ -939,7 +883,7 @@ static List_t* __parse_pattern(
                             }
                         }
 
-                        // Create the new factory.
+                        // Create the new factory from the overall pattern string of the declaration.
                         fuzz_error_t* p_err = NULL;
                         fuzz_factory_t* p_ff = PatternFactory__new( p_lvl0_sub, &p_err );
 
@@ -951,18 +895,19 @@ static List_t* __parse_pattern(
                         // Create the generator context.
                         fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff, FUZZ_GEN_DEFAULT_REF_CTX_TYPE );
 
+                        // Attach the subcontext to the parent context/factory. Uses the variable hash
+                        //   as an indexer for faster lookups (hopefully).
+                        fuzz_subcontext_t* p_subctx = &(p_ctx->subcontexts[p_ctx->subcontexts_count]);
+                        p_subctx->hash = hash;
+                        p_subctx->p_gen_ctx = p_gctx;
+                        memcpy(  &(p_subctx->label[0]), p_varname,
+                            strnlen( p_varname, (FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1) )  );
+
+                        // Increment the subcontexts counter.
+                        p_ctx->subcontexts_count++;
+
                         // Nullify this nest's (nest 0) tracker.
                         *((p_ctx->p_nest_tracker)+nest_level) = NULL;
-
-                        // FINALLY, create and populate the shard and attach it to the outer factory.
-                        fuzz_ref_shard_t* p_fs = (fuzz_ref_shard_t*)calloc( 1, sizeof(fuzz_ref_shard_t) );
-                        p_fs->p_gen_ctx = p_gctx;
-                        memcpy ( &(p_fs->label[0]), p_varname,
-                            strnlen(p_varname,(FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1)) );
-                        p_fs->label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH-1] = '\0';
-
-                        List__add( ll_shards, p_fs );
-
 
                         // All done here.
                         free( (void*)p_lvl0_sub );
@@ -972,17 +917,12 @@ static List_t* __parse_pattern(
 
                     case '@' :
                     case '%' : {
-                        // Check whether the variable name exists in the ll_shards linked list.
-                        //   TODO: HACKY!
+                        // Make sure the referenced variable hash is defined.
                         void* p_x = NULL;
-                        for ( size_t i = 0; i < List__length( ll_shards ); i++ ) {
-                            fuzz_ref_shard_t* p_shard = (fuzz_ref_shard_t*)List__get_at( ll_shards, i );
 
-                            if ( NULL != p_shard ) {
-                                if ( 0 == strcmp( p_varname, &(p_shard->label[0]) )  ) {
-                                    p_x = p_shard;
-                                }
-                            }
+                        for ( size_t i = 0; i < p_ctx->subcontexts_count; i++ ) {
+                            if ( hash == (p_ctx->subcontexts[i]).hash )
+                                p_x = &(p_ctx->subcontexts[i]);
                         }
 
                         if ( NULL == p_x ) {
@@ -1284,7 +1224,7 @@ static List_t* __parse_pattern(
                     p_lvl0_sub = strdup( p_sub );
 
                 (p_ctx->nest_level)++;   // increase the nest level and enter
-                List_t* p_pre = __parse_pattern( p_ctx, p_sub, ll_shards );
+                List_t* p_pre = __parse_pattern( p_ctx, p_sub );
                 (p_ctx->nest_level)--;   // ... and now leave the nest
                 free( p_sub );
 

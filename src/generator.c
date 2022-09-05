@@ -113,41 +113,6 @@ static uint64_t topow( uint64_t a, uint64_t b ) {
 
 
 
-// Inline method to look up a registered/indexed generator context based on a hashed string (label) value.
-static inline fuzz_gen_ctx_t* __Generator__subcontext_for_label( fuzz_factory_t* p_ff, char* p_label ) {
-    // Using the 'djb2' hashing algorithm to get the 'hash'.
-    unsigned long hash = 5381;
-    int c;
-    while ( (c = *p_label++) )
-        hash = ( (hash << 5) + hash ) + c;   // hash * 33 + c
-
-    // Search the index opaquely for the hash. If found, return the pointer. Else, NULL.
-    //   'Opaquely' here referring to the fact that this is iterating raw memory and is 'typeless'.
-    //   A 'shard' here is a word which needs some refactoring. It essentially means an index or
-    //   association between a string and a subcontext generator.
-    void* p_scroll = (void*)&(p_ff->shard_idx[0]);
-    size_t i = 0;
-    for ( ; i < FUZZ_MAX_VARIABLES; i++ ) {
-        if (
-            0 == memcmp(  (p_scroll + (i*sizeof(_hash_to_gen_ctx_t))), &hash, sizeof(unsigned long)  )
-        ) {
-            // The value inside the private struct is a pointer, this is a pointer to that.
-            //   Thus, a double-pointer is needed to dereference the genctx fully.
-            return *(
-                (fuzz_gen_ctx_t**)(
-                    p_scroll
-                    + (i*sizeof(_hash_to_gen_ctx_t))
-                    + sizeof(unsigned long)
-                )
-            );
-        }
-    }
-
-    return NULL;
-}
-
-
-
 // Create a new generator context for re/use to make string generation faster.
 fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
     if ( NULL == p_factory )  return NULL;
@@ -252,8 +217,8 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case reference : {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(pip->data);
 
-                fuzz_gen_ctx_t* p_gctx =
-                    __Generator__subcontext_for_label( p_ctx->p_factory, &(p_ref->label[0]) );
+                fuzz_gen_ctx_t* p_gctx = PatternFactory__get_subcontext(
+                    p_ctx->p_factory, &(p_ref->label[0]) );
 
                 // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
                 if ( NULL == p_gctx )  goto __gen_overflow;

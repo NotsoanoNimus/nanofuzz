@@ -21,8 +21,8 @@
 #define FUZZ_MAX_NESTING_COMPLEXITY 5
 // Maximum amount of separate items in a single 'range' mechanism (i.e. [1-2,3-4,5-6,...]).
 #define FUZZ_MAX_PATTERN_RANGE_FRAGMENTS 16
-// Max amount of ref shards allowed per fuzz_factory_t context.
-#define FUZZ_MAX_VARIABLES 16
+// Max amount of subcontexts allowed per fuzz_factory_t context.
+#define FUZZ_MAX_SUBCONTEXTS 32
 // Max amount of different conditions which can be OR'd together with the '|' mechanism.
 #define FUZZ_MAX_STEPS 32
 // Max length of data a pattern is allowed to output in a single iteration.
@@ -54,13 +54,14 @@ typedef enum _reference_type {
 
 
 
-// Terse structure for indexing unsigned-long hashes to gen ctx pointers on the factory.
-//   This struct is populated in the __compress... function so gen lookups don't need to do
-//   haystack searches for variable labels and instead can use a very fast hash lookup.
-typedef struct _fuzz_hash_to_gen_ctx_t {
-    unsigned long _hash;    //the hash (using 'djb2')
-    void* _ctx;   //the generator context assoc w/ the string hash
-} _hash_to_gen_ctx_t;
+// Simple structure to maintain hash-to-generator-context values for factory subcontexts.
+typedef struct _fuzz_subcontext_reference_t {
+    unsigned long hash;    //the hash for the reference name (using 'djb2')
+    // The string used in declaring the name of the variable/subcontext.
+    char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
+    // The generator context to use when shuffling the variable or initializing it.
+    void* p_gen_ctx;   // this pointer is a 'void' type to avoid circular dependencies...
+} fuzz_subcontext_t;
 
 
 // Represents a single contiguous block of memory which all of the block items get joined into.
@@ -74,9 +75,9 @@ typedef struct _fuzz_factory_t {
     //   Represents the combined possible data output size.
     size_t max_output_size;
     // List of references attached to this factory as sub-factories by variable name.
-    List_t* ref_shards;
-    // See struct definition above.
-    _hash_to_gen_ctx_t shard_idx[FUZZ_MAX_VARIABLES];
+    fuzz_subcontext_t subcontexts[FUZZ_MAX_SUBCONTEXTS];
+    // Amount of subcontexts currently attached.
+    size_t subcontexts_count;
 } fuzz_factory_t;
 
 
@@ -106,6 +107,8 @@ typedef struct _fuzz_reference_t {
     // This label is the name of the variable assigned to the block when type is
     //   a declaration, the reference name otherwise. It's the 'glue' to the context.
     char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
+    // The hash of the label name.
+    unsigned long hash;
     // The sub-type for the reference.
     reference_type type;
     // The following OPTIONAL fields are only used (at the moment) for length references.
@@ -166,6 +169,9 @@ void PatternFactory__delete( fuzz_factory_t* p_fact );
 
 // Explain the procedural string generation process, outputting to the given stream/file.
 void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
+
+// Return the pointer to a generator context attached to a pattern factory as a subcontext.
+void* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label );
 
 
 
