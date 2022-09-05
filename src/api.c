@@ -185,6 +185,10 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
 
         while ( generated < p_stack->size ) {
             nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
+            if ( NULL == p_data ) {
+                p_stack->is_error = 1;
+                return;
+            }
 
             Nanofuzz__output_stack_push( p_stack, p_data );
 
@@ -203,6 +207,10 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
             continue;
         }
 
+        // Check for errors in output generation.
+        if ( 0 != p_stack->is_error )
+            return;
+
         // Generate and push to stack.
         nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
         if ( NULL == p_data ) {
@@ -212,6 +220,7 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
 
         Nanofuzz__output_stack_push( p_stack, p_data );
 
+        p_data->output = NULL;   // change this so the output can remain but output ptr is NULL
         free( p_data );
     }
 }
@@ -246,15 +255,15 @@ static nanofuzz_data_t* Nanofuzz__output_stack_pop( nanofuzz_output_stack_t* p_s
 
     pthread_mutex_lock( &(p_stack->mutex) );
 
-    nanofuzz_data_t* p_data = (p_stack->p_base + (sizeof(nanofuzz_data_t)*(p_stack->count)));
     p_stack->count--;
+    nanofuzz_data_t* p_data = (p_stack->p_base + (sizeof(nanofuzz_data_t)*(p_stack->count)));
 
     nanofuzz_data_t* p_data_copy = (nanofuzz_data_t*)calloc( 1, sizeof(nanofuzz_data_t) );
     memcpy( p_data_copy, p_data, sizeof(nanofuzz_data_t) );
 
     pthread_mutex_unlock( &(p_stack->mutex) );
 
-    return p_data;
+    return p_data_copy;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////

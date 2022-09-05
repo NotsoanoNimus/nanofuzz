@@ -27,7 +27,7 @@
 #define FUZZ_MAX_STEPS 32
 // Max length of data a pattern is allowed to output in a single iteration.
 //   This also controls the generator context's output size.
-#define FUZZ_MAX_OUTPUT_SIZE ((1 << 32) - 1)
+#define FUZZ_MAX_OUTPUT_SIZE ((1UL << 32) - 1)
 
 
 

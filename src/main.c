@@ -384,7 +384,6 @@ int main( int argc, char* const argv[] ) {
     ;
 
     if ( NULL == p_fuzz_ctx ) {
-printf("NULL CTX\n" );
         Error__print( p_err_ctx, stderr );
 
         free( p_output_file );
