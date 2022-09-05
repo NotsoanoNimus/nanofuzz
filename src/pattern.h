@@ -61,6 +61,9 @@ typedef struct _fuzz_subcontext_reference_t {
     char label[FUZZ_MAX_PATTERN_LABEL_NAME_LENGTH];
     // The generator context to use when shuffling the variable or initializing it.
     void* p_gen_ctx;   // this pointer is a 'void' type to avoid circular dependencies...
+    // Maintain the most recently-generated subcontext data. This is never accessed outside
+    //   the parent factory's generator through variable references.
+    void* p_most_recent;   // same here
 } fuzz_subcontext_t;
 
 
@@ -171,7 +174,7 @@ void PatternFactory__delete( fuzz_factory_t* p_fact );
 void PatternFactory__explain( FILE* p_stream, fuzz_factory_t* p_fact );
 
 // Return the pointer to a generator context attached to a pattern factory as a subcontext.
-void* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label );
+fuzz_subcontext_t* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label );
 
 
 

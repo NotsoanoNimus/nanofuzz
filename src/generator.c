@@ -34,7 +34,6 @@ struct _fuzz_generator_context_t {
     gen_pool_type type;              // controls the size of the alloc'd data pool
     state_t state;                   // see above; context state
     fuzz_factory_t* p_factory;       // core of the context: constructed factory
-    fuzz_str_t* p_most_recent;       // points to the most recently-generated stream
     unsigned char* p_data_pool;      // stores generated data
     unsigned char* p_pool_end;       // marks the end of the data pool in memory
 };
@@ -138,10 +137,6 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     memset( &((x->state).counter[0]), 0, sizeof(counter_t)*FUZZ_MAX_NESTING_COMPLEXITY );
     (x->state).nest_level = 0;
 
-    // Prime the generator. This reduces the amount of times we later need to check for
-    //   whether `p_most_recent` is defined, because it always will be.
-    Generator__get_next( x );
-
     return x;
 }
 
@@ -155,12 +150,6 @@ void Generator__delete_context( fuzz_gen_ctx_t* p_ctx ) {
 
         PatternFactory__delete( p_ctx->p_factory );
         p_ctx->p_factory = NULL;
-
-        if ( NULL != p_ctx->p_most_recent )
-            free( (void*)(p_ctx->p_most_recent->output) );
-
-        free( p_ctx->p_most_recent );
-        p_ctx->p_most_recent = NULL;
 
         free( p_ctx );
     }
@@ -189,8 +178,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         (void*)pip + (p_ctx->p_factory->count * sizeof(fuzz_factory_t));
 
     while ( pip && end != pip->type && (void*)pip < p_instruction_limit ) {
-        if ( NULL == pip )  return NULL;   // TODO: should this be here?
-
         // If the current state has a nullified pointer set and the type isn't a ret or sub, keep moving.
         if (  sub != pip->type && ret != pip->type && NULL != p_nullified  ) {
             pip++;
@@ -217,21 +204,22 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case reference : {
                 fuzz_reference_t* p_ref = (fuzz_reference_t*)(pip->data);
 
-                fuzz_gen_ctx_t* p_gctx = PatternFactory__get_subcontext(
+                fuzz_subcontext_t* p_subctx = PatternFactory__get_subcontext(
                     p_ctx->p_factory, &(p_ref->label[0]) );
 
                 // If the gen ctx couldn't be found for the label, break out. This would be a big problem.
-                if ( NULL == p_gctx )  goto __gen_overflow;
+                if ( NULL == p_subctx )  goto __gen_overflow;
 
                 // Either get the most recent or generate if there is no most-recent.
                 int was_regen = 0;
-                fuzz_str_t* p_str = p_gctx->p_most_recent;
+                fuzz_str_t* p_new_data = NULL;
+                fuzz_str_t* p_str = (fuzz_str_t*)(p_subctx->p_most_recent);
                 if ( NULL == p_str ) {
                     // Hasn't been shuffled yet; generate the first item in the sub-factory.
-                    Generator__get_next( p_gctx );
+                    p_new_data = Generator__get_next( (fuzz_gen_ctx_t*)(p_subctx->p_gen_ctx) );
+                    p_str = p_new_data;
                     was_regen = 1;
                 }
-                p_str = p_gctx->p_most_recent;
 
                 switch ( p_ref->type ) {
 
@@ -347,19 +335,30 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         //   If this is already a fresh shuffle, don't do anything (saves time).
                         // NOTE: This ignores the 'iters' value to save time. Only one shuffle at a time.
                         if ( !was_regen ) {
-                            if ( NULL != p_gctx->p_most_recent ) {
-                                if ( NULL != p_gctx->p_most_recent->output )
-                                    free( (void*)(p_gctx->p_most_recent->output) );
-                                free( p_gctx->p_most_recent );
-                                p_gctx->p_most_recent = NULL;
+                            if ( NULL != p_subctx->p_most_recent ) {
+                                free( ((fuzz_str_t*)(p_subctx->p_most_recent))->output );
+                                free( p_subctx->p_most_recent );
+                                p_subctx->p_most_recent = NULL;
                             }
 
-                            Generator__get_next( p_gctx );
+                            p_new_data = Generator__get_next( (fuzz_gen_ctx_t*)(p_subctx->p_gen_ctx) );
+                            was_regen = 1;
                         }
                         break;
                     }
 
                     default : break;   // if this somehow happens, do nothing; just move on
+                }
+
+                // If the data for the subctx was regenerated, free the old data and replace the pointer.
+                if ( was_regen && NULL != p_new_data ) {
+                    fuzz_str_t* p_old_data = (fuzz_str_t*)(p_subctx->p_most_recent);
+
+                    if ( NULL != p_old_data )
+                        free( p_old_data->output );
+                    free( p_old_data );
+
+                    p_subctx->p_most_recent = p_new_data;
                 }
 
                 // Move to the next block. References do not loop.
@@ -528,7 +527,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
     }
 
     // Save the pool information to the current generator context.
-    p_ctx->p_most_recent = p_ret;
+//    p_ctx->p_most_recent = p_ret;
 
     // Clear the data pool for the next generation.
     memset( p_ctx->p_data_pool, 0, (p_ret->length + 1) );
@@ -544,7 +543,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         memset( p_ctx->p_data_pool, 0,
             ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
         (p_ctx->state).nest_level = 0;   //reset on overflow
-        p_ctx->p_most_recent = NULL;
+//        p_ctx->p_most_recent = NULL;
 
         // Return NULL to indicate crashy conditions.
         return NULL;
@@ -591,8 +590,8 @@ void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
 
 // Get the data pointer for the most recent data in a context.
 fuzz_str_t* Generator__get_most_recent( fuzz_gen_ctx_t* p_ctx ) {
-    if ( NULL != p_ctx )
-        return p_ctx->p_most_recent;
+//    if ( NULL != p_ctx )
+//        return p_ctx->p_most_recent;
 
     return NULL;
 }
@@ -601,8 +600,8 @@ fuzz_str_t* Generator__get_most_recent( fuzz_gen_ctx_t* p_ctx ) {
 
 // Flush data pointer for most recent.
 void Generator__flush_most_recent( fuzz_gen_ctx_t* p_ctx ) {
-    if ( NULL != p_ctx )
-        p_ctx->p_most_recent = NULL;
+//    if ( NULL != p_ctx )
+//        p_ctx->p_most_recent = NULL;
 }
 
 

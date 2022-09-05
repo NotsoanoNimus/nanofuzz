@@ -539,13 +539,13 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
 
 
 // Return the pointer to a generator context attached to a pattern factory as a subcontext.
-void* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label ) {
+fuzz_subcontext_t* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, char* p_label ) {
     if ( NULL == p_factory )  return NULL;
 
     for ( size_t i = 0; i < p_factory->subcontexts_count; i++ ) {
         if (  0 == strcmp( &((p_factory->subcontexts[i]).label[0]), p_label )  ) {
-            // This will never NOT be a gen ctx pointer, so doing a void* cast doesn't matter.
-            return (void*)((p_factory->subcontexts[i]).p_gen_ctx);
+            // This will never NOT be a pointer, so doing a void* cast doesn't matter.
+            return (void*)&(p_factory->subcontexts[i]);
         }
     }
 }

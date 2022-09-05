@@ -147,6 +147,7 @@ void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data )
             p_data->output = NULL;
         }
 
+/*
         // Prevent dangling pointers on the context where applicable.
         if (
                NULL != p_ctx
@@ -154,6 +155,7 @@ void Nanofuzz__delete_data( nanofuzz_context_t* p_ctx, nanofuzz_data_t* p_data )
             && p_data == Generator__get_most_recent( p_ctx->_p_gen_ctx )
         )
             Generator__flush_most_recent( p_ctx->_p_gen_ctx );
+*/
 
         free( p_data );
     }
@@ -187,7 +189,7 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
             nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
             if ( NULL == p_data ) {
                 p_stack->is_error = 1;
-                return;
+                return NULL;
             }
 
             Nanofuzz__output_stack_push( p_stack, p_data );
@@ -196,7 +198,7 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
             generated++;
         }
 
-        return;
+        return NULL;
     }
 
     // 'Refill' types keep the thread alive to replenish the stack as items are taken.
@@ -209,13 +211,13 @@ static void* Nanofuzz__thread_refresh_context( void* _p_ctx ) {
 
         // Check for errors in output generation.
         if ( 0 != p_stack->is_error )
-            return;
+            return NULL;
 
         // Generate and push to stack.
         nanofuzz_data_t* p_data = Generator__get_next( p_ctx->_p_gen_ctx );
         if ( NULL == p_data ) {
             p_stack->is_error = 1;
-            return;
+            return NULL;
         }
 
         Nanofuzz__output_stack_push( p_stack, p_data );
