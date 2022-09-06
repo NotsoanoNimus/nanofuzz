@@ -553,7 +553,7 @@ fuzz_subcontext_t* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, ch
 
 
 // Define a set of functional or syntactically special characters.
-static const char special_chars[] = "|\\[{(<>)}]";
+static const char special_chars[] = "?*|\\[{(<>)}]";
 // Macro to register a fuzz error inside a fuzz_ctx (the pattern_parse func mainly).
 // TODO: get rid of useless error codes (might need them later for stats?)
 #define FUZZ_ERR_IN_CTX(errstr) { \
@@ -578,7 +578,7 @@ static List_t* __parse_pattern(
     const char* p_pattern
 ) {
 
-    size_t len, nest_level;
+    size_t len, nest_level, was_repetition;
     const char* p;
     const char* p_lvl0_sub;   // see the '<' section for variable declarations
     List_t* p_seq;
@@ -591,6 +591,7 @@ static List_t* __parse_pattern(
 
     len = strnlen( p_pattern, (FUZZ_MAX_PATTERN_LENGTH-1) );
     nest_level = p_ctx->nest_level;
+    was_repetition = 0;
 
     p = p_pattern;
     p_lvl0_sub = NULL;
@@ -601,6 +602,13 @@ static List_t* __parse_pattern(
     for ( ; p < (p_pattern+len) && (*p); p++ ) {
 //printf( "READ(%lu) [%p]:  '%c'\n", p_ctx->nest_level, p, *p );
         fuzz_pattern_block_t* p_new_block = NULL;
+
+        // Ensure repetition statement types cannot be chained from iteration to iteration.
+        //   This is because the repetition and optional types don't create a block on the node chain.
+        if (  was_repetition && *p && ( '{' == *p || '?' == *p )  ) {
+            FUZZ_ERR_IN_CTX( "Multiple Repetitions '{}' and/or Optionals '?' can be chained together" );
+        }
+        was_repetition = 0;
 
         switch ( *p ) {
 
@@ -1081,6 +1089,26 @@ static List_t* __parse_pattern(
                     break;   //safety-first
             }
 
+            // ********** WILDCARDS **********
+            case '*': {
+                p_new_block = NEW_PATTERN_BLOCK;
+                p_new_block->type = range;
+                (p_new_block->count).single = 1;
+                (p_new_block->count).base = 1;
+                (p_new_block->count).high = 1;
+                *((p_ctx->p_nest_tracker)+nest_level) = p_new_block;
+
+                // Manually create a range node that's a single fragment, from 0 to 255.
+                fuzz_range_t* p_range = (fuzz_range_t*)calloc( 1, sizeof(fuzz_range_t) );
+                p_range->amount = 1;
+                (p_range->fragments[0]).single = 0;
+                (p_range->fragments[0]).base = 0;
+                (p_range->fragments[0]).high = 255;
+
+                p_new_block->data = p_range;
+                break;
+            }
+
             // ********** RANGES **********
             case '[': {
                 // Find the end of the bracket.
@@ -1107,6 +1135,24 @@ static List_t* __parse_pattern(
 
                 // Set 'p' to end. It will increment to the character after ']' once the for-loop continues.
                 p = end;
+                break;
+            }
+
+            // ********** OPTIONALS **********
+            case '?': {
+                // The current block ptr cannot be NULL.
+                // TODO: This shouldn't follow branch mechs
+                if ( NULL == *((p_ctx->p_nest_tracker)+nest_level) ) {
+                    FUZZ_ERR_IN_CTX( "The repetition statement '{}' must follow a valid string or other pattern" )
+                }
+
+                // Set the most recent pattern block's count to be 0 or 1, thereby making it optional.
+                fuzz_pattern_block_t* p_block = *((p_ctx->p_nest_tracker)+nest_level);
+                (p_block->count).single = 0;
+                (p_block->count).base = 0;
+                (p_block->count).high = 1;
+
+                was_repetition = 1;
                 break;
             }
 
@@ -1147,8 +1193,7 @@ static List_t* __parse_pattern(
                 }
 
                 // Set 'p' to end. It will increment to the character after '}' once the for-loop continues.
-                //   Also nullify the tracker so repetition mechs can't be chained.
-                *((p_ctx->p_nest_tracker)+nest_level) = NULL;
+                was_repetition = 1;
                 p = end;
                 break;
             }

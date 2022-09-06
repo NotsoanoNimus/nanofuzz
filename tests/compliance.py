@@ -82,14 +82,18 @@ def clean_gen_files():
 def pattern_to_regex( pattern ):
     _regex = pattern
 
-    # Fix special chars that aren't escaped in nanofuzz inputs.
-    _regex = re.sub( r'([^<\[\\])([*+?\^\$\.])', r'\1\\\2', _regex )
-    _regex = re.sub( r'^([*+?\^\$\.])', r'\\\1', _regex )
+    # Fix special chars that aren't always escaped in nanofuzz inputs.
+    _regex = re.sub( r'([^<\[\\])([+\^\$\.])', r'\1\\\2', _regex )
+    _regex = re.sub( r'^([+\^\$\.])', r'\\\1', _regex )
 
 
     # Fix repetitions and make them more explicit.
     _regex = re.sub( r'([^\\]){,', r'\1{0,', _regex )
     _regex = re.sub( r',}', ',65535}', _regex )
+
+
+    # Fix other repetition or range shortcut aliases.
+    _regex = re.sub( r'\*', '[\\x00-\\xFF]', _regex )
 
 
     # Fix ranges. Get rid of unescaped commas and convert decimal escapes to hex.
