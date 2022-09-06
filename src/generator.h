@@ -42,8 +42,27 @@ typedef enum _fuzz_gen_ctx_pool_type_t {
 
 
 
-// Define a generator context to use, which must be associated with a factory.
-typedef struct _fuzz_generator_context_t fuzz_gen_ctx_t;
+// This struct is used to 'prime' the generator by directly providing a pre-
+//   allocated context to re/use for 'get_next' operations. Sharing this context
+//   does NOT affect the randomness of the sequences.
+typedef struct _fuzz_generator_counter_t {
+    unsigned short how_many;   // how many (chosen randomly within range)
+    unsigned short generated;   // count of items already iterated/generated
+} fuzz_gen_ctx_counter_t;
+
+typedef struct _fuzz_generator_state_vector_t {
+    size_t nest_level;   // tracks the current index into ^
+    fuzz_gen_ctx_counter_t counter[FUZZ_MAX_NESTING_COMPLEXITY];   // counters for tracking sub-related repetitions
+} fuzz_gen_ctx_state_t;
+
+typedef struct _fuzz_generator_context_t {
+    gen_pool_type type;              // controls the size of the alloc'd data pool
+    fuzz_gen_ctx_state_t state;                   // see above; context state
+    fuzz_factory_t* p_factory;       // core of the context: constructed factory
+    unsigned char* p_data_pool;      // stores generated data
+    unsigned char* p_pool_end;       // marks the end of the data pool in memory
+} fuzz_gen_ctx_t;
+
 // Define the structure of generated data. This is simply a void-ptr to a blob, with a strict length.
 typedef struct _fuzz_str_t {
     const void* output;

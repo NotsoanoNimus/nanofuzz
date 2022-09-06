@@ -64,7 +64,9 @@ varying mechanisms used to create fuzzy outputs, and dives into examples for eac
 | Static String | `any string` | `abcde` | The most basic unit, static strings never vary in fuzzer outputs and always generate how they're entered. |
 | Escape Character | `\character` | `\n` | Causes the following character to be output as a literal value, or as something which can't be otherwise reperesented easily in the input Pattern String. |
 | Repetition | `{...}` | `abc{,3}` | Changes the varying amount of times the previous Block will run. Can be a range from 0 to 65535. |
+| Optional | `?` | `this\sis(\snot)?\sok` | Simple Repetition alias. The preceding Block will either appear once or not at all. Equivalent to `{0,1}`. |
 | Range | `[...]` | `[^\x00,0-9,A-Z,\xF0-\xFF]{,4}` | Specifies a set of characters (or an inverse thereof) which could be randomly chosen as part of the output data. |
+| Wildcard | `*` | `123abc*{3}` | Simple Range alias. Outputs any single character/byte from `0x00` to `0xFF`; therefore equivalent to `[\\x00-\\xFF]`. |
 | Subsequence | `(...)` | `(abc(def){2,4}(ghi){1,3}jkl){1,2000}` | Creates a delimited subsegment of instructions in the output which can be treated as a single Block (unit) in output generation. |
 | Branch | `...\|...` | `a\|b\|(cde)\|f` | Randomly elects to output one of the possible [single] Blocks with the pipe '\|' operator between them. |
 | Variable | `<...>` | `((me,\s){4}me!{,3})<$VARNAME>` | Creates sub-patterns inside the primary generator which can be dynamically referenced, counted, reshuffled, etc. |
@@ -146,7 +148,8 @@ To take the concept a bit further, using a repeating subsequence like:
 ```
 ... has the chance to generate an output like `abcddddddeabcdddddddd`, where the "inner" part of the
 subsequence mechanism (see below) is iterated twice (`{2}`) and the `d{5,10}` evaluated as "write `d`
-5 to 10 times". The `e{,1}` is interpreted as "write `e` 0 to 1 times".
+5 to 10 times". The `e{,1}` is interpreted as "write `e` 0 to 1 times". This same sequence (`e{,1}`)
+can be written as `e?` to accomplish the same goal more concisely.
 
 
 ### Ranges

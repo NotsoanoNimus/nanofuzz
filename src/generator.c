@@ -13,33 +13,6 @@
 
 
 
-// Define a counter object which serves to track a nest or other looping
-//   type mechanism's generation count.
-typedef struct _fuzz_generator_counter_t {
-    unsigned short how_many;   // how many (chosen randomly within range)
-    unsigned short generated;   // count of items already iterated/generated
-} counter_t;
-
-// Use a quantitative state vector/context when generating new fuzzer strings.
-//   These are disposable structures used only during active string generation.
-typedef struct _fuzz_generator_state_vector_t {
-    size_t nest_level;   // tracks the current index into ^
-    counter_t counter[FUZZ_MAX_NESTING_COMPLEXITY];   // counters for tracking sub-related repetitions
-} state_t;
-
-// This struct is used to 'prime' the generator by directly providing a pre-
-//   allocated context to re/use for 'get_next' operations. Sharing this context
-//   does NOT affect the randomness of the sequences.
-struct _fuzz_generator_context_t {
-    gen_pool_type type;              // controls the size of the alloc'd data pool
-    state_t state;                   // see above; context state
-    fuzz_factory_t* p_factory;       // core of the context: constructed factory
-    unsigned char* p_data_pool;      // stores generated data
-    unsigned char* p_pool_end;       // marks the end of the data pool in memory
-};
-
-
-
 ////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
@@ -134,7 +107,7 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
         + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
     );
 
-    memset( &((x->state).counter[0]), 0, sizeof(counter_t)*FUZZ_MAX_NESTING_COMPLEXITY );
+    memset( &((x->state).counter[0]), 0, sizeof(fuzz_gen_ctx_counter_t)*FUZZ_MAX_NESTING_COMPLEXITY );
     (x->state).nest_level = 0;
 
     return x;
@@ -167,7 +140,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
 
     fuzz_pattern_block_t* pip;   // aka "pseudo-instruction-pointer"
     unsigned char* p_current;
-    counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
+    fuzz_gen_ctx_counter_t* p_nullified = NULL;   // tracks subsequences with 0 iters--nullifies all inside contents
 
     pip = (fuzz_pattern_block_t*)(p_ctx->p_factory->node_seq);
     p_current = p_ctx->p_data_pool;
@@ -336,7 +309,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                         // NOTE: This ignores the 'iters' value to save time. Only one shuffle at a time.
                         if ( !was_regen ) {
                             if ( NULL != p_subctx->p_most_recent ) {
-                                free( ((fuzz_str_t*)(p_subctx->p_most_recent))->output );
+                                free( (void*)(((fuzz_str_t*)(p_subctx->p_most_recent))->output) );
                                 free( p_subctx->p_most_recent );
                                 p_subctx->p_most_recent = NULL;
                             }
@@ -355,7 +328,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
                     fuzz_str_t* p_old_data = (fuzz_str_t*)(p_subctx->p_most_recent);
 
                     if ( NULL != p_old_data )
-                        free( p_old_data->output );
+                        free( (void*)(p_old_data->output) );
                     free( p_old_data );
 
                     p_subctx->p_most_recent = p_new_data;
@@ -424,11 +397,11 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case sub : {
                 // Get the pointer to the counter for the current nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
-                counter_t* p_ctr = &((p_ctx->state).counter[*lvl]);
+                fuzz_gen_ctx_counter_t* p_ctr = &((p_ctx->state).counter[*lvl]);
                 if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // Set the amount to generate and zero out the 'generated' counter.
-                memset( p_ctr, 0, sizeof(counter_t) );
+                memset( p_ctr, 0, sizeof(fuzz_gen_ctx_counter_t) );
                 p_ctr->how_many = iters;
                 p_ctr->generated = 0;
 
@@ -447,7 +420,7 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
             case ret : {
                 // Get the pointer to the counter for the __PREVIOUS__ (outer) nest level.
                 size_t* lvl = &((p_ctx->state).nest_level);
-                counter_t* p_ctr = &((p_ctx->state).counter[*lvl - 1]);
+                fuzz_gen_ctx_counter_t* p_ctr = &((p_ctx->state).counter[*lvl - 1]);
                 if ( NULL == p_ctr )  goto __gen_overflow;
 
                 // If 'nullified' is set, check the p_ctr address to see if it matches. If so,

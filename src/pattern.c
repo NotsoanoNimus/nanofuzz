@@ -180,7 +180,7 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
 
     // Quickly verify types and get the maximum possible block size. If an overflow is
     //   possible, or if there are any invalid block types, then error.
-    size_t possible_generation_size = 0, total_multiplier = 1;
+    size_t possible_generation_size = 0;
     // Each time a sub block is encountered, its 'high' (max) possible count is added to a multiplier.
     //   'ret' blocks will drop the multiplier.
     unsigned short nest_level = 0;
@@ -191,18 +191,22 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
         fuzz_pattern_block_t* p_block =
             (fuzz_pattern_block_t*)(p_ff->node_seq + (x * sizeof(fuzz_pattern_block_t)));
 
-        if ( (pattern_block_type)NULL == p_block->type || end == p_block->type )
+        if ( (pattern_block_type)NULL == p_block->type )
             goto __length_err;
+        else if ( end == p_block->type )
+            break;
+
+        size_t total_multiplier = 1;
+        for ( size_t i = 0; i < nest_level; i++ )
+            total_multiplier *= nest_multipliers[i];
 
         switch ( p_block->type ) {
             case sub : {
                 nest_multipliers[nest_level] = (p_block->count).high;
-                total_multiplier *= nest_multipliers[nest_level];
                 nest_level++;
                 break;
             }
             case ret : {
-                total_multiplier /= nest_multipliers[nest_level];
                 nest_multipliers[nest_level] = 0;
                 nest_level--;
                 break;
@@ -218,19 +222,31 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
                 if ( ref_declaration == p_x->type || ref_shuffle == p_x->type )
                     break;
 
+                if ( ref_count == p_x->type ) {
+                    // 64 is the maximum possible size of a variable count.
+                    possible_generation_size += (total_multiplier * 64);
+                    goto __max_output_next_block;
+                }
+
                 // Get the attached sub-factory, which should have its own max_output_size to
                 //   multiply against the nest multipliers.
-//                if (  List__length( p_
+                fuzz_subcontext_t* p_subctx = PatternFactory__get_subcontext( p_ff, &(p_x->label[0]) );
+                if ( NULL == p_subctx )
+                    goto __max_output_next_block;
+
+                fuzz_factory_t* p_factory = ((fuzz_gen_ctx_t*)(p_subctx->p_gen_ctx))->p_factory;
+
+                 possible_generation_size += (total_multiplier * p_factory->max_output_size);
             }
             default : {
-                // Static strings, ranges, and wildcards. The high value is multiplied
+                // Static strings, ranges, wildcards, etc. The high value is multiplied
                 //   by the high count of the surrounding nests.
                 //   Ex: (abc(de{1,5}f){,3}){4,5} --> 'e' will count 75 (5x3x5) possible times.
                 possible_generation_size += (total_multiplier * (p_block->count).high);
-
                 break;
             }
 
+            __max_output_next_block:
             if ( possible_generation_size >= FUZZ_MAX_OUTPUT_SIZE )
                 goto __length_err;
         }
@@ -519,14 +535,12 @@ fuzz_factory_t* PatternFactory__new( const char* p_pattern_str, fuzz_error_t** p
     p_ff->subcontexts_count = p_ctx->subcontexts_count;
     p_ctx->subcontexts_count = 0;
 
-/*
     // Get the max possible output size of the factory.
     size_t max_size = __PatternFactory__get_max_output_size( p_ff );
     if ( !max_size ) {
         PatternFactory__delete( p_ff );
         p_ff = NULL;
     }
-*/
 
     // Discard the context since a pointer to the err ctx is available.
     __ParserContext__delete( p_ctx, pp_err );
@@ -548,6 +562,8 @@ fuzz_subcontext_t* PatternFactory__get_subcontext( fuzz_factory_t* p_factory, ch
             return (void*)&(p_factory->subcontexts[i]);
         }
     }
+
+    return NULL;
 }
 
 
