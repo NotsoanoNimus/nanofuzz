@@ -154,7 +154,9 @@ can be written as `e?` to accomplish the same goal more concisely.
 
 ### Ranges
 
-
+Range mechanisms allow the choice of any random character in a given range (or inverse range) to be
+written to the fuzzer output. Ranges can include single characters or a few different character
+ranges.
 
 
 ### Subsequences
