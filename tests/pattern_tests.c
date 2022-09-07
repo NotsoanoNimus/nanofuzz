@@ -33,11 +33,7 @@
     Test(dead_pattern,name) { \
         const char* p_str = thepattern; \
         nanofuzz_context_t* p_ctx = Nanofuzz__new( p_str, 1, oneshot, &p_err_ctx ); \
-        cr_assert( NULL != p_ctx, "The nanofuzz context is not valid for this overflow input." ); \
-        nanofuzz_data_t* p_data = Nanofuzz__get_next( p_ctx ); \
-        cr_assert( NULL == p_data, "Generator must crash for this test." ); \
-        Nanofuzz__delete_data( p_ctx, p_data ); \
-        Nanofuzz__delete( p_ctx ); \
+        cr_assert( NULL == p_ctx, "The nanofuzz context must be NULL for this overflow input." ); \
     }
 
 // Test patterns which should generate valid data and a valid fuzzer context.

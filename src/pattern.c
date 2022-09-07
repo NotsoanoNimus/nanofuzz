@@ -191,7 +191,7 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
         fuzz_pattern_block_t* p_block =
             (fuzz_pattern_block_t*)(p_ff->node_seq + (x * sizeof(fuzz_pattern_block_t)));
 
-        if ( (pattern_block_type)NULL == p_block->type )
+        if ( (pattern_block_type)NULL == p_block->type || possible_generation_size > FUZZ_MAX_OUTPUT_SIZE )
             goto __length_err;
         else if ( end == p_block->type )
             break;
@@ -211,9 +211,9 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
                 nest_level--;
                 break;
             }
-            case branch_root : {
-                break;
-            }
+            // These two items are currently ignored. The program just counts together all
+            //   possible branch items as part of the final total.
+            case branch_root :
             case branch_jmp : {
                 break;
             }
@@ -236,13 +236,16 @@ static inline size_t __PatternFactory__get_max_output_size( fuzz_factory_t* p_ff
 
                 fuzz_factory_t* p_factory = ((fuzz_gen_ctx_t*)(p_subctx->p_gen_ctx))->p_factory;
 
-                 possible_generation_size += (total_multiplier * p_factory->max_output_size);
+                possible_generation_size += (total_multiplier * p_factory->max_output_size * (p_block->count).high);
             }
             default : {
                 // Static strings, ranges, wildcards, etc. The high value is multiplied
                 //   by the high count of the surrounding nests.
                 //   Ex: (abc(de{1,5}f){,3}){4,5} --> 'e' will count 75 (5x3x5) possible times.
-                possible_generation_size += (total_multiplier * (p_block->count).high);
+                size_t data_len = 1;
+                if ( string == p_block->type )
+                    data_len = strlen( (char*)(p_block->data) );
+                possible_generation_size += (total_multiplier * data_len * (p_block->count).high);
                 break;
             }
 
@@ -293,6 +296,12 @@ void PatternFactory__delete( fuzz_factory_t* p_fact ) {
         for ( size_t i = 0; i < p_fact->subcontexts_count; i++ ) {
             Generator__delete_context(  (p_fact->subcontexts[i]).p_gen_ctx  );
             (p_fact->subcontexts[i]).p_gen_ctx = NULL;
+
+            if ( NULL != (p_fact->subcontexts[i]).p_most_recent ) {
+                free( (void*)(((fuzz_str_t*)(p_fact->subcontexts[i]).p_most_recent)->output) );
+                free( (void*)(p_fact->subcontexts[i]).p_most_recent );
+                (p_fact->subcontexts[i]).p_most_recent = NULL;
+            }
         }
     }
 
@@ -1583,10 +1592,12 @@ static inline int __bracket_parse_range( fuzz_pattern_block_t* const p_block, co
         (p_block->count).single = 1;
 
         uint16_t val = __get_valid_uint16( p_content );
-        if ( val )
+        if ( val ) {
             (p_block->count).base = val;
-        else
+            (p_block->count).high = val;
+        } else {
             return 0;
+        }
     }
 
     return 1;

@@ -99,12 +99,11 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
     x->type = type;
     x->p_factory = p_factory;
-    x->p_data_pool = (unsigned char*)calloc( 1,
-        (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+    x->p_data_pool = (unsigned char*)calloc( 1, (sizeof(unsigned char)*(p_factory->max_output_size))+1 );
     x->p_pool_end = (
-        1
+        2
         + (x->p_data_pool)
-        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
+        + (p_factory->max_output_size)
     );
 
     memset( &((x->state).counter[0]), 0, sizeof(fuzz_gen_ctx_counter_t)*FUZZ_MAX_NESTING_COMPLEXITY );
