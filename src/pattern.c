@@ -926,7 +926,7 @@ static List_t* __parse_pattern(
                         }
 
                         // Create the generator context.
-                        fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff, FUZZ_GEN_DEFAULT_REF_CTX_TYPE );
+                        fuzz_gen_ctx_t* p_gctx = Generator__new_context( p_ff );
 
                         // Attach the subcontext to the parent context/factory. Uses the variable hash
                         //   as an indexer for faster lookups (hopefully).

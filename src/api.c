@@ -70,8 +70,7 @@ nanofuzz_context_t* Nanofuzz__new(
         goto __context_new_err;
 
     // Create a new generator context to prepare output generation.
-    p_ctx->_p_gen_ctx = Generator__new_context(
-        p_ctx->_p_parent_factory, FUZZ_GEN_DEFAULT_POOL_SIZE );
+    p_ctx->_p_gen_ctx = Generator__new_context( p_ctx->_p_parent_factory );
 
     // Allocate and set up the stack. The size is sizeof(data)*output_stack_size.
     nanofuzz_output_stack_t* p_stack = &(p_ctx->_stack);

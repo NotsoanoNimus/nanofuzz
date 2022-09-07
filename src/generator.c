@@ -86,9 +86,8 @@ static uint64_t topow( uint64_t a, uint64_t b ) {
 
 
 // Create a new generator context for re/use to make string generation faster.
-fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type type ) {
+fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory ) {
     if ( NULL == p_factory )  return NULL;
-    if ( (gen_pool_type)NULL == type )  type = normal;
 
     // Seed the static PRNG if it hasn't been done yet. This will only happen a single time,
     //   even if the application is running in threaded mode.
@@ -97,7 +96,6 @@ fuzz_gen_ctx_t* Generator__new_context( fuzz_factory_t* p_factory, gen_pool_type
 
     // Create the generator context and return it.
     fuzz_gen_ctx_t* x = (fuzz_gen_ctx_t*)calloc( 1, sizeof(fuzz_gen_ctx_t) );
-    x->type = type;
     x->p_factory = p_factory;
     x->p_data_pool = (unsigned char*)calloc( 1, (sizeof(unsigned char)*(p_factory->max_output_size))+1 );
     x->p_pool_end = (
@@ -498,9 +496,6 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         p_ret->output = NULL;
     }
 
-    // Save the pool information to the current generator context.
-//    p_ctx->p_most_recent = p_ret;
-
     // Clear the data pool for the next generation.
     memset( p_ctx->p_data_pool, 0, (p_ret->length + 1) );
 
@@ -512,10 +507,8 @@ fuzz_str_t* Generator__get_next( fuzz_gen_ctx_t* p_ctx ) {
         // When a generator buffer is going to overflow, STOP and RESET!
         //   This can also occur on other types of faults, so NULL is returned to indicate a
         //   failure to generate patterned content.
-        memset( p_ctx->p_data_pool, 0,
-            ((p_ctx->type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
+        memset( p_ctx->p_data_pool, 0, (sizeof(char)*(p_ctx->p_factory->max_output_size)+1) );
         (p_ctx->state).nest_level = 0;   //reset on overflow
-//        p_ctx->p_most_recent = NULL;
 
         // Return NULL to indicate crashy conditions.
         return NULL;
@@ -538,42 +531,6 @@ void Generator__get_next_to_stream( fuzz_gen_ctx_t* p_ctx, FILE* fp_to ) {
     // Free the resource.
     free( (void*)(p_tmp->output) );
     free( (void*)p_tmp );
-}
-
-
-
-// Resize a generator's data pool to the new ctx type.
-void Generator__resize_context( fuzz_gen_ctx_t* p_ctx, gen_pool_type type ) {
-    if ( !p_ctx )  return;
-
-    if ( p_ctx->p_data_pool )  free( p_ctx->p_data_pool );
-
-    p_ctx->type = type;
-    p_ctx->p_data_pool = (unsigned char*)calloc( 1,
-        (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char)) );
-    p_ctx->p_pool_end = (
-        1
-        + (p_ctx->p_data_pool)
-        + (((size_t)type)*FUZZ_GEN_CTX_POOL_MULTIPLIER*sizeof(unsigned char))
-    );
-}
-
-
-
-// Get the data pointer for the most recent data in a context.
-fuzz_str_t* Generator__get_most_recent( fuzz_gen_ctx_t* p_ctx ) {
-//    if ( NULL != p_ctx )
-//        return p_ctx->p_most_recent;
-
-    return NULL;
-}
-
-
-
-// Flush data pointer for most recent.
-void Generator__flush_most_recent( fuzz_gen_ctx_t* p_ctx ) {
-//    if ( NULL != p_ctx )
-//        p_ctx->p_most_recent = NULL;
 }
 
 
