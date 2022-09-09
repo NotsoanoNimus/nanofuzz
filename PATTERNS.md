@@ -161,7 +161,42 @@ ranges.
 
 ### Subsequences
 
+Subsequence mechanisms represent a delimited section of a Pattern String as a whole unit or individual
+Block on its own. Subsequences are "nest-able", meaning they can layer and nest within each other to form
+complex layered statements. These are useful for delimiting sections of an input pattern string as a
+variable declaration, part of a branch selection, or setting a repetition amount for the block. These are
+created using surrounding parenthesis `(...)` operators.
 
+If you have regex or programming experience, these mechanisms should make some intuitive sense despite the
+name used. Consider the following statement:
+```
+(12345){1,5}
+```
+This will repeat the static string block `12345` anywhere from 1 to 5 times in the fuzzer output. The
+parenthesis allow the whole string to be encapsulated into its own modifiable Block (or section) to which
+the range `{1,5}` is applied.
+
+Here's a more complex sample:
+```
+(X-HTTP-HEADER-[^\x00]{1,24}:\s*{1,64}\r\n){5,15}
+```
+The outer wrapper or Subsequence operator in this Pattern String clearly shows this pattern for a
+randomly-named `X-HTTP[...]` header with arbitrary content should be repeated `{5,15}` (5 to 15) times
+in the output.
+
+Lastly, consider the case of using a Subsequence for a branch mechanism:
+```
+the\scar\sis\s(redd(er)|(enned)|(ish))|(blue(ish)?)|(green(ish)?)
+```
+Some outputs from this might appear as:
+```
+the car is reddish
+the car is green
+the car is blueish
+the car is redder
+```
+Note how Subsequence wrappings carefully control and delimit which parts of the Pattern String input are
+part of the branch selections and which parts are static.
 
 
 ### Branches
