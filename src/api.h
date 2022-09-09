@@ -16,6 +16,17 @@
 
 
 
+// Instrumentation to catch code path changes.
+#define NANOFUZZ_STATS_PRE \
+void __nanofuzz_register_function_call( void* callee, void* caller ) \
+    __attribute__((no_instrument_function)); \
+void __cyg_profile_func_enter( void* callee, void* caller ) \
+    __attribute__((no_instrument_function)); \
+void __cyg_profile_func_exit( void* callee, void* caller ) \
+    __attribute__((no_instrument_function));
+
+
+
 // Alias some common or externally necessary structures.
 //   Names beginning with 'nanofuzz' rather than 'fuzz' are assumed
 //   to be used externally.
